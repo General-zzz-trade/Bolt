@@ -42,7 +42,6 @@ jobs:
         with:
           name: agent-swarm-windows-x64
           path: build/mini_nn.exe
-        shell: pwsh
 
   build-linux:
     runs-on: ubuntu-latest
