@@ -18,6 +18,7 @@ public:
                                  const std::string& query,
                                  std::size_t max_matches,
                                  std::uintmax_t max_file_bytes) const override;
+    FileDeleteResult remove_file(const std::filesystem::path& path) const override;
 };
 
 #endif

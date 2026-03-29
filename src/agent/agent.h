@@ -66,6 +66,22 @@ public:
     /// Access to the prefetch cache for tools that read files.
     FilePrefetchCache& prefetch_cache() { return prefetch_cache_; }
 
+    // History access for session save/load
+    std::vector<ChatMessage> get_chat_messages() const;
+    void restore_history(const std::vector<ChatMessage>& messages);
+
+    // Compact context
+    void compact_history();
+
+    // Debug toggle
+    void set_debug(bool enabled);
+
+    // Cancellation support
+    void set_cancellation_check(std::function<bool()> check);
+
+    // Last response token usage
+    TokenUsage last_token_usage() const;
+
 private:
     std::unique_ptr<IModelClient> client_;
     std::shared_ptr<IApprovalProvider> approval_provider_;
@@ -85,6 +101,8 @@ private:
     FilePrefetchCache prefetch_cache_;
     PromptCompressor prompt_compressor_;
     ToolResultCache tool_result_cache_;
+    std::function<bool()> cancellation_check_;
+    TokenUsage last_usage_;
 
     std::string build_prompt() const;
     std::vector<ChatMessage> build_chat_messages() const;

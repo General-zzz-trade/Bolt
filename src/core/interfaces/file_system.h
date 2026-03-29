@@ -18,6 +18,11 @@ struct FileWriteResult {
     std::string error;
 };
 
+struct FileDeleteResult {
+    bool success;
+    std::string error;
+};
+
 struct DirectoryEntryInfo {
     bool is_directory;
     std::string name;
@@ -60,6 +65,7 @@ public:
                                          const std::string& query,
                                          std::size_t max_matches,
                                          std::uintmax_t max_file_bytes) const = 0;
+    virtual FileDeleteResult remove_file(const std::filesystem::path& path) const = 0;
 };
 
 #endif

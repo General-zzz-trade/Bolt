@@ -279,6 +279,59 @@ ToolResult Agent::run_diagnostic_tool(const std::string& tool_name, const std::s
     }
 }
 
+std::vector<ChatMessage> Agent::get_chat_messages() const {
+    std::vector<ChatMessage> messages;
+    for (const auto& msg : history_) {
+        ChatMessage cm;
+        if (msg.role == "user") cm.role = ChatRole::user;
+        else if (msg.role == "assistant") cm.role = ChatRole::assistant;
+        else if (msg.role == "tool") { cm.role = ChatRole::tool; cm.name = msg.name; }
+        else cm.role = ChatRole::user;
+        cm.content = msg.content;
+        messages.push_back(std::move(cm));
+    }
+    return messages;
+}
+
+void Agent::restore_history(const std::vector<ChatMessage>& messages) {
+    history_.clear();
+    for (const auto& cm : messages) {
+        Message msg;
+        msg.role = chat_role_to_string(cm.role);
+        msg.content = cm.content;
+        msg.name = cm.name;
+        history_.push_back(std::move(msg));
+    }
+    last_execution_trace_.clear();
+}
+
+void Agent::compact_history() {
+    auto messages = build_chat_messages();
+    // build_chat_messages already runs compression
+    // Replace history with compressed version
+    history_.clear();
+    for (const auto& cm : messages) {
+        if (cm.role == ChatRole::system) continue; // skip system prompt
+        Message msg;
+        msg.role = chat_role_to_string(cm.role);
+        msg.content = cm.content;
+        msg.name = cm.name;
+        history_.push_back(std::move(msg));
+    }
+}
+
+void Agent::set_debug(bool enabled) {
+    debug_ = enabled;
+}
+
+void Agent::set_cancellation_check(std::function<bool()> check) {
+    cancellation_check_ = std::move(check);
+}
+
+TokenUsage Agent::last_token_usage() const {
+    return last_usage_;
+}
+
 void Agent::push_history(Message message) {
     history_.push_back(std::move(message));
     enforce_history_budget();
@@ -561,6 +614,11 @@ std::string Agent::run_turn_structured(const std::string& user_input,
         &thread_pool_);
 
     for (int step = 0; step < runtime_config_.max_model_steps; ++step) {
+        if (cancellation_check_ && cancellation_check_()) {
+            push_history({"assistant", "[Cancelled by user]", ""});
+            return "[Cancelled by user]";
+        }
+
         const std::vector<ChatMessage> messages = build_chat_messages();
         const std::vector<ToolSchema> schemas = build_tool_schemas();
 
@@ -578,11 +636,14 @@ std::string Agent::run_turn_structured(const std::string& user_input,
                     prefetch_cache_.on_streaming_token(accumulated, workspace_root_);
                     // Forward token to caller (SSE passthrough)
                     if (on_token) on_token(token);
+                    // Check cancellation
+                    if (cancellation_check_ && cancellation_check_()) return false;
                     return true;
                 });
         } else {
             response = client_->chat(messages, schemas);
         }
+        last_usage_ = response.usage;
         log_debug("Model Response", "content=" + response.content +
                   " tool_calls=" + std::to_string(response.tool_calls.size()));
 

@@ -95,6 +95,21 @@ FileWriteResult LinuxFileSystem::write_text_file(const std::filesystem::path& pa
     }
 }
 
+FileDeleteResult LinuxFileSystem::remove_file(const std::filesystem::path& path) const {
+    try {
+        if (!std::filesystem::exists(path)) {
+            return {false, "File does not exist"};
+        }
+        if (!std::filesystem::is_regular_file(path)) {
+            return {false, "Path is not a regular file"};
+        }
+        std::filesystem::remove(path);
+        return {true, ""};
+    } catch (const std::exception& e) {
+        return {false, e.what()};
+    }
+}
+
 TextSearchResult LinuxFileSystem::search_text(const std::filesystem::path& root,
                                                const std::string& query,
                                                std::size_t max_matches,

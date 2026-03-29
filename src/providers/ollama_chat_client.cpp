@@ -158,6 +158,12 @@ ChatMessage OllamaChatClient::chat(const std::vector<ChatMessage>& messages,
         }
     }
 
+    // Extract token usage
+    try {
+        result.usage.input_tokens = j.value("prompt_eval_count", 0);
+        result.usage.output_tokens = j.value("eval_count", 0);
+    } catch (...) {}
+
     return result;
 }
 
@@ -221,6 +227,11 @@ ChatMessage OllamaChatClient::chat_streaming(const std::vector<ChatMessage>& mes
                     }
 
                     if (j.value("done", false)) {
+                        // Extract token usage from final message
+                        try {
+                            result.usage.input_tokens = j.value("prompt_eval_count", 0);
+                            result.usage.output_tokens = j.value("eval_count", 0);
+                        } catch (...) {}
                         return false;
                     }
                 } catch (...) {}

@@ -1,4 +1,5 @@
 #include "app_config.h"
+#include "setup_wizard.h"
 
 #include <algorithm>
 #include <cctype>
@@ -8,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "setup_wizard.h"
 
 namespace {
 
@@ -381,7 +384,11 @@ void validate_config(const AppConfig& config) {
 
 AppConfig load_app_config(const std::filesystem::path& workspace_root) {
     AppConfig config;
+    // Load global user config first (lowest priority)
+    load_setup_config(config);
+    // Then workspace config overrides
     load_config_file(workspace_root, &config);
+    // Then env overrides (highest priority)
     load_environment_overrides(&config);
     validate_config(config);
     return config;

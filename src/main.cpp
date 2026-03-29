@@ -12,6 +12,7 @@
 #include "app/agent_factory.h"
 #include "app/app_config.h"
 #include "app/agent_runner.h"
+#include "app/setup_wizard.h"
 #include "app/benchmark_runner.h"
 #include "core/mcp/mcp_server.h"
 #include "app/program_cli.h"
@@ -38,9 +39,30 @@ void print_usage(const char* program_name) {
 
 int run_agent(int argc, char* argv[]) {
     const std::filesystem::path workspace_root = std::filesystem::current_path();
+
+    // Quick pre-parse to check if there's a prompt (for wizard decision)
+    const auto args = collect_cli_args(argc, argv, 2);
+
+    // Run setup wizard on first interactive launch
+    if (!is_setup_complete()) {
+        bool is_interactive = true;
+        for (size_t i = 0; i < args.size(); ++i) {
+            const auto& a = args[i];
+            if (a == "--debug" || a == "--no-debug" || a == "--resume") continue;
+            if (a == "--model" && i + 1 < args.size()) { ++i; continue; }
+            if (a.rfind("--", 0) != 0 && a.find(':') == std::string::npos) {
+                is_interactive = false;  // has a prompt
+                break;
+            }
+        }
+        if (is_interactive) {
+            run_setup_wizard();
+        }
+    }
+
     const AppConfig config = load_app_config(workspace_root);
     const AgentCliOptions options =
-        resolve_agent_cli_options(collect_cli_args(argc, argv, 2), config);
+        resolve_agent_cli_options(args, config);
     std::unique_ptr<Agent> agent =
         create_platform_agent(workspace_root, config, options, std::cin, std::cout);
 
@@ -48,7 +70,7 @@ int run_agent(int argc, char* argv[]) {
         return run_agent_single_turn(*agent, options.prompt, std::cout);
     }
 
-    return run_agent_interactive_loop(*agent, std::cin, std::cout, workspace_root);
+    return run_agent_interactive_loop(*agent, std::cin, std::cout, workspace_root, options.resume);
 }
 
 int run_web_chat(int argc, char* argv[]) {

@@ -101,6 +101,16 @@ public:
                                  std::uintmax_t) const override {
         return {false, {}, false, "Not implemented in integration tests"};
     }
+
+    FileDeleteResult remove_file(const std::filesystem::path& path) const override {
+        try {
+            if (!std::filesystem::exists(path)) return {false, "File does not exist"};
+            std::filesystem::remove(path);
+            return {true, ""};
+        } catch (const std::exception& e) {
+            return {false, e.what()};
+        }
+    }
 };
 
 class RecordingCommandRunner : public ICommandRunner {

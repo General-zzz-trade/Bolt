@@ -128,6 +128,16 @@ public:
                                  std::uintmax_t) const override {
         return {false, {}, false, "Not implemented in tests"};
     }
+
+    FileDeleteResult remove_file(const std::filesystem::path& path) const override {
+        try {
+            if (!std::filesystem::exists(path)) return {false, "File does not exist"};
+            std::filesystem::remove(path);
+            return {true, ""};
+        } catch (const std::exception& e) {
+            return {false, e.what()};
+        }
+    }
 };
 
 class RecordingCommandRunner : public ICommandRunner {
@@ -1529,7 +1539,7 @@ void expect_agent_runner_single_turn_writes_response() {
 
     const int exit_code = run_agent_single_turn(agent, "Say something.", output);
     expect_true(exit_code == 0, "Single-turn runner should return success");
-    expect_equal(output.str(), "single-turn reply\n",
+    expect_equal(output.str(), "single-turn reply\n\n",
                  "Single-turn runner should write the agent response");
 }
 
@@ -1548,16 +1558,27 @@ void expect_agent_runner_interactive_loop_handles_commands() {
 
     Agent agent(std::move(scripted_client), approval_provider, temp_dir.path(), {}, {}, false,
                 nullptr, make_test_tool_registry(temp_dir.path(), file_system, command_runner));
-    std::istringstream input("first-question\n/clear\n\nsecond-question\n/quit\n");
+
+    // The interactive loop now uses TerminalInput which reads from std::cin in
+    // non-TTY mode.  Redirect std::cin to a stringstream for the test.
+    std::string test_input = "first-question\n/clear\n\nsecond-question\n/quit\n";
+    std::istringstream fake_cin(test_input);
+    auto* original_cin_buf = std::cin.rdbuf(fake_cin.rdbuf());
+
+    std::istringstream input_unused;
     std::ostringstream output;
 
-    const int exit_code = run_agent_interactive_loop(agent, input, output);
+    const int exit_code = run_agent_interactive_loop(agent, input_unused, output);
+
+    // Restore std::cin
+    std::cin.rdbuf(original_cin_buf);
+
     expect_true(exit_code == 0, "Interactive runner should return success");
     expect_true(output.str().find("Bolt") != std::string::npos,
                 "Interactive runner should print the Bolt banner");
     expect_true(output.str().find("first reply") != std::string::npos,
                 "Interactive runner should print the first reply");
-    expect_true(output.str().find("History cleared.") != std::string::npos,
+    expect_true(output.str().find("cleared") != std::string::npos,
                 "Interactive runner should acknowledge /clear");
     expect_true(output.str().find("second reply") != std::string::npos,
                 "Interactive runner should print the second reply");

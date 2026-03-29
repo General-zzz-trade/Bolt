@@ -11,6 +11,7 @@ namespace {
 struct AgentCliOverrides {
     std::optional<bool> debug;
     std::optional<std::string> model;
+    bool resume = false;
     std::string prompt;
 };
 
@@ -38,6 +39,11 @@ AgentCliOverrides parse_agent_cli_overrides(const std::vector<std::string>& args
         }
         if (current == "--no-debug") {
             overrides.debug = false;
+            ++index;
+            continue;
+        }
+        if (current == "--resume") {
+            overrides.resume = true;
             ++index;
             continue;
         }
@@ -83,6 +89,7 @@ AgentCliOptions resolve_agent_cli_options(const std::vector<std::string>& args,
 
     AgentCliOptions options;
     options.debug = overrides.debug.value_or(config.agent_runtime.default_debug);
+    options.resume = overrides.resume;
     options.model = overrides.model.value_or(config.default_model);
     options.prompt = overrides.prompt;
     return options;

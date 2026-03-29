@@ -16,11 +16,13 @@ struct PolicyConfig {
         "wait_for_window",
         "task_planner",
         "code_intel",
+        "git",
     };
 
     std::unordered_set<std::string> bounded_write_tools = {
         "write_file",
         "edit_file",
+        "delete_file",
     };
 
     std::unordered_set<std::string> bounded_command_tools = {

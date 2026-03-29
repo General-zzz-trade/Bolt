@@ -8,7 +8,9 @@
 #include "calculator_tool.h"
 #include "click_element_tool.h"
 #include "code_intel_tool.h"
+#include "delete_file_tool.h"
 #include "edit_file_tool.h"
+#include "git_tool.h"
 #include "focus_window_tool.h"
 #include "inspect_ui_tool.h"
 #include "list_dir_tool.h"
@@ -46,7 +48,10 @@ ToolRegistry create_default_tool_registry(
     tools.register_tool(std::make_unique<ReadFileTool>(workspace_root, file_system));
     tools.register_tool(
         std::make_unique<WriteFileTool>(workspace_root, file_system, audit_logger));
+    tools.register_tool(
+        std::make_unique<DeleteFileTool>(workspace_root, file_system, audit_logger));
     tools.register_tool(std::make_unique<SearchCodeTool>(workspace_root, file_system));
+    tools.register_tool(std::make_unique<GitTool>(workspace_root, command_runner));
     tools.register_tool(std::make_unique<CodeIntelTool>(workspace_root, file_system));
     tools.register_tool(
         std::make_unique<RunCommandTool>(workspace_root, command_runner, audit_logger,

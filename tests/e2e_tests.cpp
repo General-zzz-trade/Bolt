@@ -91,6 +91,15 @@ public:
                                  std::size_t, std::uintmax_t) const override {
         return {false, {}, false, "Not implemented"};
     }
+    FileDeleteResult remove_file(const std::filesystem::path& p) const override {
+        try {
+            if (!std::filesystem::exists(p)) return {false, "File does not exist"};
+            std::filesystem::remove(p);
+            return {true, ""};
+        } catch (const std::exception& e) {
+            return {false, e.what()};
+        }
+    }
 };
 
 class RecordingCommandRunner : public ICommandRunner {

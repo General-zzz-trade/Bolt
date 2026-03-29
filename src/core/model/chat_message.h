@@ -23,12 +23,20 @@ struct ToolCallRequest {
     std::string arguments;  // JSON string
 };
 
+struct TokenUsage {
+    int input_tokens = 0;
+    int output_tokens = 0;
+    int cache_creation_tokens = 0;
+    int cache_read_tokens = 0;
+};
+
 struct ChatMessage {
     ChatRole role = ChatRole::user;
     std::string content;
     std::string name;            // for tool role: which tool produced this
     std::string tool_call_id;    // for tool role: which tool_call this responds to
     std::vector<ToolCallRequest> tool_calls;  // for assistant role: requested tool calls
+    TokenUsage usage;  // token usage from API response
 
     bool has_tool_calls() const { return !tool_calls.empty(); }
 };

@@ -190,6 +190,15 @@ ChatMessage GeminiClient::parse_response(const std::string& body) const {
         }
     }
 
+    // Extract token usage
+    try {
+        if (j.contains("usageMetadata")) {
+            const auto& usage = j["usageMetadata"];
+            result.usage.input_tokens = usage.value("promptTokenCount", 0);
+            result.usage.output_tokens = usage.value("candidatesTokenCount", 0);
+        }
+    } catch (...) {}
+
     return result;
 }
 

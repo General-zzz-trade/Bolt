@@ -45,10 +45,14 @@ function getSelectedText(): string | undefined {
   return selection.isEmpty ? undefined : editor.document.getText(selection);
 }
 
-function findBoltBinary(): string {
+function findBoltBinary(): string | undefined {
   const config = vscode.workspace.getConfiguration("bolt");
   const custom = config.get<string>("binaryPath");
-  if (custom && fs.existsSync(custom)) return custom;
+  if (custom) {
+    if (fs.existsSync(custom)) return custom;
+    vscode.window.showErrorMessage(`Bolt binary not found at configured path: ${custom}`);
+    return undefined;
+  }
 
   // Check common locations
   const candidates = [
@@ -62,6 +66,15 @@ function findBoltBinary(): string {
     if (fs.existsSync(full)) return full;
   }
   return "bolt" + ext; // Hope it's in PATH
+}
+
+function getNonce(): string {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < 32; i++) {
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
 }
 
 class BoltChatViewProvider implements vscode.WebviewViewProvider {
@@ -91,6 +104,10 @@ class BoltChatViewProvider implements vscode.WebviewViewProvider {
 
   private async handleUserMessage(text: string) {
     const binary = findBoltBinary();
+    if (!binary) {
+        this.view?.webview.postMessage({type: "error", text: "Bolt binary not found. Set bolt.binaryPath in settings."});
+        return;
+    }
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
 
     const config = vscode.workspace.getConfiguration("bolt");
@@ -133,9 +150,11 @@ class BoltChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private getHtml(): string {
+    const nonce = getNonce();
     return `<!DOCTYPE html>
 <html>
 <head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
   body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-sideBar-background);padding:0;margin:0;display:flex;flex-direction:column;height:100vh}
   .messages{flex:1;overflow-y:auto;padding:12px;font-size:13px}
@@ -160,7 +179,7 @@ class BoltChatViewProvider implements vscode.WebviewViewProvider {
     <textarea id="input" rows="2" placeholder="Ask Bolt..."></textarea>
     <button id="send">Send</button>
   </div>
-  <script>
+  <script nonce="${nonce}">
     const vscode=acquireVsCodeApi();
     const msgs=document.getElementById("messages");
     const input=document.getElementById("input");

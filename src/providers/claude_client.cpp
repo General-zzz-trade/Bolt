@@ -188,6 +188,17 @@ ChatMessage ClaudeClient::parse_response(const std::string& body) const {
     ChatMessage result;
     result.role = ChatRole::assistant;
 
+    // Extract token usage
+    try {
+        if (j.contains("usage")) {
+            const auto& usage = j["usage"];
+            result.usage.input_tokens = usage.value("input_tokens", 0);
+            result.usage.output_tokens = usage.value("output_tokens", 0);
+            result.usage.cache_creation_tokens = usage.value("cache_creation_input_tokens", 0);
+            result.usage.cache_read_tokens = usage.value("cache_read_input_tokens", 0);
+        }
+    } catch (...) {}
+
     for (const auto& block : j["content"]) {
         const std::string type = block.value("type", "");
         if (type == "text") {
@@ -278,6 +289,24 @@ ChatMessage ClaudeClient::chat_streaming(const std::vector<ChatMessage>& message
                     current_tool_name.clear();
                     current_tool_input.clear();
                 }
+            } else if (type == "message_delta") {
+                // Extract usage from the final message_delta event
+                try {
+                    if (j.contains("usage")) {
+                        const auto& usage = j["usage"];
+                        result.usage.output_tokens = usage.value("output_tokens", 0);
+                    }
+                } catch (...) {}
+            } else if (type == "message_start") {
+                // Extract input token usage from the message_start event
+                try {
+                    if (j.contains("message") && j["message"].contains("usage")) {
+                        const auto& usage = j["message"]["usage"];
+                        result.usage.input_tokens = usage.value("input_tokens", 0);
+                        result.usage.cache_creation_tokens = usage.value("cache_creation_input_tokens", 0);
+                        result.usage.cache_read_tokens = usage.value("cache_read_input_tokens", 0);
+                    }
+                } catch (...) {}
             } else if (type == "message_stop") {
                 return false;
             }

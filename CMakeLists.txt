@@ -32,7 +32,9 @@ add_library(bolt_core STATIC
         src/agent/calculator_tool.cpp
         src/agent/click_element_tool.cpp
         src/agent/code_intel_tool.cpp
+        src/agent/delete_file_tool.cpp
         src/agent/edit_file_tool.cpp
+        src/agent/git_tool.cpp
         src/agent/focus_window_tool.cpp
         src/agent/inspect_ui_tool.cpp
         src/agent/list_dir_tool.cpp
@@ -58,12 +60,18 @@ add_library(bolt_core STATIC
         src/app/agent_factory.cpp
         src/app/agent_cli_options.cpp
         src/app/agent_runner.cpp
+        src/app/terminal_input.cpp
         src/app/approval_provider_factory.cpp
         src/app/file_audit_logger.cpp
         src/app/program_cli.cpp
         src/app/self_check_runner.cpp
         src/app/static_approval_provider.cpp
         src/app/terminal_approval_provider.cpp
+        src/app/terminal_renderer.cpp
+        src/app/signal_handler.cpp
+        src/app/token_tracker.cpp
+        src/app/web_approval_provider.cpp
+        src/app/setup_wizard.cpp
         src/app/web_chat_cli_options.cpp
         src/platform/platform_agent_factory.cpp
 )
@@ -108,7 +116,6 @@ add_executable(bolt
         src/matrix.cpp
         src/demo/training_demo.cpp
         src/app/benchmark_runner.cpp
-        src/app/web_approval_provider.cpp
         src/app/web_chat_server.cpp
 )
 if (WIN32)
@@ -132,3 +139,15 @@ add_test(NAME capability_tests COMMAND capability_tests)
 add_executable(e2e_tests tests/e2e_tests.cpp)
 target_link_libraries(e2e_tests PRIVATE bolt_core)
 add_test(NAME e2e_tests COMMAND e2e_tests)
+
+add_executable(sse_parser_tests tests/sse_parser_tests.cpp)
+target_link_libraries(sse_parser_tests PRIVATE bolt_core)
+add_test(NAME sse_parser_tests COMMAND sse_parser_tests)
+
+add_executable(mcp_server_tests tests/mcp_server_tests.cpp)
+target_link_libraries(mcp_server_tests PRIVATE bolt_core)
+add_test(NAME mcp_server_tests COMMAND mcp_server_tests)
+
+add_executable(approval_provider_tests tests/approval_provider_tests.cpp)
+target_link_libraries(approval_provider_tests PRIVATE bolt_core)
+add_test(NAME approval_provider_tests COMMAND approval_provider_tests)

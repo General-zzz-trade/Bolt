@@ -11,10 +11,11 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -39,6 +40,8 @@ using BOOL = int;
 #include "agent_status.h"
 #include "self_check_runner.h"
 #include "web_approval_provider.h"
+
+using json = nlohmann::json;
 
 namespace {
 
@@ -125,46 +128,6 @@ std::string to_lower_copy(const std::string& value) {
     return lowered;
 }
 
-std::string escape_json_string(const std::string& value) {
-    std::string escaped;
-    escaped.reserve(value.size());
-    for (const char ch : value) {
-        switch (ch) {
-            case '\\':
-                escaped += "\\\\";
-                break;
-            case '"':
-                escaped += "\\\"";
-                break;
-            case '\n':
-                escaped += "\\n";
-                break;
-            case '\r':
-                escaped += "\\r";
-                break;
-            case '\t':
-                escaped += "\\t";
-                break;
-            default:
-                escaped += ch;
-                break;
-        }
-    }
-    return escaped;
-}
-
-std::string json_string_field(const std::string& key, const std::string& value) {
-    return "\"" + key + "\":\"" + escape_json_string(value) + "\"";
-}
-
-std::string json_bool_field(const std::string& key, bool value) {
-    return "\"" + key + "\":" + std::string(value ? "true" : "false");
-}
-
-std::string json_number_field(const std::string& key, std::size_t value) {
-    return "\"" + key + "\":" + std::to_string(value);
-}
-
 std::string read_text_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
@@ -218,6 +181,7 @@ void send_json(SOCKET socket, int status_code, const std::string& body) {
         : status_code == 400 ? "Bad Request"
         : status_code == 404 ? "Not Found"
         : status_code == 409 ? "Conflict"
+        : status_code == 429 ? "Too Many Requests"
         : "Internal Server Error";
     send_response(socket, status_code, status_text, "application/json; charset=utf-8", body);
 }
@@ -296,101 +260,19 @@ HttpRequest read_request(SOCKET socket) {
 }
 
 std::string extract_json_string_field(const std::string& body, const std::string& key) {
-    const std::string pattern = "\"" + key + "\"";
-    const std::size_t key_position = body.find(pattern);
-    if (key_position == std::string::npos) {
+    const json parsed = json::parse(body);
+    if (!parsed.contains(key) || !parsed[key].is_string()) {
         throw std::runtime_error("Missing JSON field: " + key);
     }
-
-    const std::size_t colon = body.find(':', key_position + pattern.size());
-    if (colon == std::string::npos) {
-        throw std::runtime_error("Invalid JSON field: " + key);
-    }
-
-    std::size_t quote = body.find('"', colon + 1);
-    if (quote == std::string::npos) {
-        throw std::runtime_error("JSON string field is missing opening quote: " + key);
-    }
-
-    std::string value;
-    ++quote;
-    bool escaped = false;
-    for (std::size_t i = quote; i < body.size(); ++i) {
-        const char ch = body[i];
-        if (escaped) {
-            switch (ch) {
-                case 'n':
-                    value += '\n';
-                    break;
-                case 'r':
-                    value += '\r';
-                    break;
-                case 't':
-                    value += '\t';
-                    break;
-                case '\\':
-                case '"':
-                case '/':
-                    value += ch;
-                    break;
-                default:
-                    value += ch;
-                    break;
-            }
-            escaped = false;
-            continue;
-        }
-        if (ch == '\\') {
-            escaped = true;
-            continue;
-        }
-        if (ch == '"') {
-            return value;
-        }
-        value += ch;
-    }
-
-    throw std::runtime_error("Unterminated JSON string field: " + key);
+    return parsed[key].get<std::string>();
 }
 
 bool extract_json_bool_field(const std::string& body, const std::string& key) {
-    const std::string pattern = "\"" + key + "\"";
-    const std::size_t key_position = body.find(pattern);
-    if (key_position == std::string::npos) {
+    const json parsed = json::parse(body);
+    if (!parsed.contains(key) || !parsed[key].is_boolean()) {
         throw std::runtime_error("Missing JSON field: " + key);
     }
-
-    const std::size_t colon = body.find(':', key_position + pattern.size());
-    if (colon == std::string::npos) {
-        throw std::runtime_error("Invalid JSON field: " + key);
-    }
-
-    const std::string value = to_lower_copy(trim_copy(body.substr(colon + 1)));
-    if (value.rfind("true", 0) == 0) {
-        return true;
-    }
-    if (value.rfind("false", 0) == 0) {
-        return false;
-    }
-    throw std::runtime_error("Invalid boolean field: " + key);
-}
-
-std::string approval_snapshot_json(const WebApprovalSnapshot& snapshot, bool busy) {
-    std::ostringstream output;
-    output << "{";
-    output << json_bool_field("busy", busy) << ",";
-    output << json_bool_field("has_pending_approval", snapshot.has_pending_request);
-    if (snapshot.has_pending_request) {
-        output << ",\"approval\":{"
-               << json_string_field("tool_name", snapshot.request.tool_name) << ","
-               << json_string_field("reason", snapshot.request.reason) << ","
-               << json_string_field("risk", snapshot.request.risk) << ","
-               << json_string_field("preview_summary", snapshot.request.preview_summary) << ","
-               << json_string_field("preview_details", snapshot.request.preview_details)
-               << "}";
-    }
-    output << "}";
-    return output.str();
+    return parsed[key].get<bool>();
 }
 
 std::string shorten_trace_detail(const std::string& value) {
@@ -401,54 +283,65 @@ std::string shorten_trace_detail(const std::string& value) {
     return value.substr(0, kMaxDetailLength) + "...";
 }
 
-std::string execution_trace_json(const std::vector<ExecutionStep>& trace) {
-    std::ostringstream output;
-    output << "[";
-    for (std::size_t i = 0; i < trace.size(); ++i) {
-        if (i > 0) {
-            output << ",";
-        }
-
-        const ExecutionStep& step = trace[i];
-        output << "{"
-               << json_number_field("index", step.index) << ","
-               << json_string_field("tool_name", step.tool_name) << ","
-               << json_string_field("reason", step.reason) << ","
-               << json_string_field("risk", step.risk) << ","
-               << json_string_field("status", execution_step_status_name(step.status)) << ","
-               << json_string_field("detail", shorten_trace_detail(step.detail))
-               << "}";
-    }
-    output << "]";
-    return output.str();
+json approval_request_json(const ApprovalRequest& request) {
+    return json{
+        {"tool_name", request.tool_name},
+        {"reason", request.reason},
+        {"risk", request.risk},
+        {"preview_summary", request.preview_summary},
+        {"preview_details", request.preview_details}
+    };
 }
 
-std::string capability_state_json(const CapabilityState& capability) {
-    std::ostringstream output;
-    output << "{"
-           << json_string_field("name", capability.name) << ","
-           << json_string_field("label", capability.label) << ","
-           << json_bool_field("implemented", capability.implemented) << ","
-           << json_bool_field("ready", capability.ready) << ","
-           << json_bool_field("verified", capability.verified) << ","
-           << json_string_field("level", capability.level) << ","
-           << json_string_field("detail", capability.detail) << ","
-           << json_string_field("last_checked_at", capability.last_checked_at)
-           << "}";
-    return output.str();
+json approval_snapshot_json(const WebApprovalSnapshot& snapshot, bool busy) {
+    json result = {
+        {"busy", busy},
+        {"has_pending_approval", snapshot.has_pending_request}
+    };
+    if (snapshot.has_pending_request) {
+        result["approval"] = approval_request_json(snapshot.request);
+    }
+    return result;
 }
 
-std::string capabilities_json(const std::vector<CapabilityState>& capabilities) {
-    std::ostringstream output;
-    output << "[";
-    for (std::size_t i = 0; i < capabilities.size(); ++i) {
-        if (i > 0) {
-            output << ",";
-        }
-        output << capability_state_json(capabilities[i]);
+json execution_step_json(const ExecutionStep& step) {
+    return json{
+        {"index", step.index},
+        {"tool_name", step.tool_name},
+        {"reason", step.reason},
+        {"risk", step.risk},
+        {"status", execution_step_status_name(step.status)},
+        {"detail", shorten_trace_detail(step.detail)}
+    };
+}
+
+json execution_trace_json(const std::vector<ExecutionStep>& trace) {
+    json result = json::array();
+    for (const auto& step : trace) {
+        result.push_back(execution_step_json(step));
     }
-    output << "]";
-    return output.str();
+    return result;
+}
+
+json capability_state_json(const CapabilityState& capability) {
+    return json{
+        {"name", capability.name},
+        {"label", capability.label},
+        {"implemented", capability.implemented},
+        {"ready", capability.ready},
+        {"verified", capability.verified},
+        {"level", capability.level},
+        {"detail", capability.detail},
+        {"last_checked_at", capability.last_checked_at}
+    };
+}
+
+json capabilities_json(const std::vector<CapabilityState>& capabilities) {
+    json result = json::array();
+    for (const auto& cap : capabilities) {
+        result.push_back(capability_state_json(cap));
+    }
+    return result;
 }
 
 HealthSnapshot build_health_snapshot(const Agent& agent,
@@ -484,51 +377,40 @@ HealthSnapshot build_health_snapshot(const Agent& agent,
     return snapshot;
 }
 
-std::string health_json(const HealthSnapshot& health) {
-    std::ostringstream output;
-    output << "{"
-           << json_string_field("overall", health.overall) << ","
-           << json_string_field("model", health.model) << ","
-           << json_bool_field("busy", health.busy) << ","
-           << json_bool_field("approval_pending", health.approval_pending) << ","
-           << json_number_field("implemented_count", health.implemented_count) << ","
-           << json_number_field("verified_count", health.verified_count) << ","
-           << json_number_field("degraded_count", health.degraded_count) << ","
-           << json_string_field("last_self_check_at", health.last_self_check_at)
-           << "}";
-    return output.str();
+json health_json(const HealthSnapshot& health) {
+    return json{
+        {"overall", health.overall},
+        {"model", health.model},
+        {"busy", health.busy},
+        {"approval_pending", health.approval_pending},
+        {"implemented_count", health.implemented_count},
+        {"verified_count", health.verified_count},
+        {"degraded_count", health.degraded_count},
+        {"last_self_check_at", health.last_self_check_at}
+    };
 }
 
-std::string state_json(const WebApprovalSnapshot& snapshot,
-                       bool busy,
-                       const std::vector<ExecutionStep>& trace) {
-    std::ostringstream output;
-    output << "{";
-    output << json_bool_field("busy", busy) << ",";
-    output << json_bool_field("has_pending_approval", snapshot.has_pending_request) << ",";
-    output << "\"last_trace\":" << execution_trace_json(trace);
+json state_json(const WebApprovalSnapshot& snapshot,
+                bool busy,
+                const std::vector<ExecutionStep>& trace) {
+    json result = {
+        {"busy", busy},
+        {"has_pending_approval", snapshot.has_pending_request},
+        {"last_trace", execution_trace_json(trace)}
+    };
     if (snapshot.has_pending_request) {
-        output << ",\"approval\":{"
-               << json_string_field("tool_name", snapshot.request.tool_name) << ","
-               << json_string_field("reason", snapshot.request.reason) << ","
-               << json_string_field("risk", snapshot.request.risk) << ","
-               << json_string_field("preview_summary", snapshot.request.preview_summary) << ","
-               << json_string_field("preview_details", snapshot.request.preview_details)
-               << "}";
+        result["approval"] = approval_request_json(snapshot.request);
     }
-    output << "}";
-    return output.str();
+    return result;
 }
 
-std::string info_json(const Agent& agent, unsigned short port, bool busy) {
-    std::ostringstream output;
-    output << "{"
-           << json_string_field("model", agent.model()) << ","
-           << json_bool_field("debug", agent.debug_enabled()) << ","
-           << "\"port\":" << port << ","
-           << json_bool_field("busy", busy)
-           << "}";
-    return output.str();
+json info_json(const Agent& agent, unsigned short port, bool busy) {
+    return json{
+        {"model", agent.model()},
+        {"debug", agent.debug_enabled()},
+        {"port", port},
+        {"busy", busy}
+    };
 }
 
 }  // namespace
@@ -540,7 +422,9 @@ WebChatServer::WebChatServer(std::filesystem::path workspace_root,
     : workspace_root_(std::move(workspace_root)),
       agent_(agent),
       approval_provider_(std::move(approval_provider)),
-      port_(port) {
+      port_(port),
+      thread_pool_(4),
+      rate_limiter_(10.0) {
     if (approval_provider_ == nullptr) {
         throw std::invalid_argument("WebChatServer requires a web approval provider");
     }
@@ -592,9 +476,17 @@ int WebChatServer::run(std::ostream& output) {
             continue;
         }
 
-        std::thread([this, client_socket = std::move(client)]() mutable {
+        thread_pool_.submit([this, client_socket = std::make_shared<SocketHandle>(std::move(client))]() {
             try {
-                const HttpRequest request = read_request(client_socket.get());
+                const HttpRequest request = read_request(client_socket->get());
+
+                // Rate limit check
+                if (!rate_limiter_.allow()) {
+                    send_json(client_socket->get(), 429,
+                              json{{"ok", false}, {"error", "Too many requests"}}.dump());
+                    return;
+                }
+
                 if (request.method == "GET" &&
                     (request.path == "/" || request.path == "/index.html" ||
                      request.path == "/app.js" || request.path == "/styles.css")) {
@@ -602,14 +494,14 @@ int WebChatServer::run(std::ostream& output) {
                         request.path == "/" ? "web/index.html" : "web" + request.path;
                     const std::filesystem::path asset_path = workspace_root_ / relative_path;
                     const std::string body = read_text_file(asset_path);
-                    send_response(client_socket.get(), 200, "OK",
+                    send_response(client_socket->get(), 200, "OK",
                                   mime_type_for_path(relative_path), body);
                     return;
                 }
 
                 if (request.method == "GET" && request.path == "/api/info") {
-                    send_json(client_socket.get(), 200,
-                              info_json(agent_, port_, agent_busy_.load()));
+                    send_json(client_socket->get(), 200,
+                              info_json(agent_, port_, agent_busy_.load()).dump());
                     return;
                 }
 
@@ -619,9 +511,9 @@ int WebChatServer::run(std::ostream& output) {
                         std::lock_guard<std::mutex> lock(state_mutex_);
                         trace_snapshot = last_trace_snapshot_;
                     }
-                    send_json(client_socket.get(), 200,
+                    send_json(client_socket->get(), 200,
                               state_json(approval_provider_->snapshot(), agent_busy_.load(),
-                                         trace_snapshot));
+                                         trace_snapshot).dump());
                     return;
                 }
 
@@ -631,9 +523,8 @@ int WebChatServer::run(std::ostream& output) {
                         std::lock_guard<std::mutex> lock(state_mutex_);
                         capability_snapshot = capability_snapshot_;
                     }
-                    send_json(client_socket.get(), 200,
-                              std::string("{\"capabilities\":") +
-                                  capabilities_json(capability_snapshot) + "}");
+                    json result = {{"capabilities", capabilities_json(capability_snapshot)}};
+                    send_json(client_socket->get(), 200, result.dump());
                     return;
                 }
 
@@ -649,14 +540,14 @@ int WebChatServer::run(std::ostream& output) {
                     const HealthSnapshot health = build_health_snapshot(
                         agent_, agent_busy_.load(), approval_snapshot.has_pending_request,
                         capability_snapshot, last_self_check_at);
-                    send_json(client_socket.get(), 200, health_json(health));
+                    send_json(client_socket->get(), 200, health_json(health).dump());
                     return;
                 }
 
                 if (request.method == "POST" && request.path == "/api/clear") {
                     if (agent_busy_.load()) {
-                        send_json(client_socket.get(), 409,
-                                  "{\"ok\":false,\"error\":\"Agent is busy\"}");
+                        send_json(client_socket->get(), 409,
+                                  json{{"ok", false}, {"error", "Agent is busy"}}.dump());
                         return;
                     }
                     std::lock_guard<std::mutex> lock(agent_mutex_);
@@ -665,15 +556,15 @@ int WebChatServer::run(std::ostream& output) {
                         std::lock_guard<std::mutex> state_lock(state_mutex_);
                         last_trace_snapshot_.clear();
                     }
-                    send_json(client_socket.get(), 200, "{\"ok\":true}");
+                    send_json(client_socket->get(), 200, json{{"ok", true}}.dump());
                     return;
                 }
 
                 if (request.method == "POST" && request.path == "/api/self-check") {
                     bool expected = false;
                     if (!agent_busy_.compare_exchange_strong(expected, true)) {
-                        send_json(client_socket.get(), 409,
-                                  "{\"ok\":false,\"error\":\"Agent is busy\"}");
+                        send_json(client_socket->get(), 409,
+                                  json{{"ok", false}, {"error", "Agent is busy"}}.dump());
                         return;
                     }
 
@@ -693,9 +584,8 @@ int WebChatServer::run(std::ostream& output) {
                     agent_busy_.store(false);
 
                     if (!error.empty()) {
-                        send_json(client_socket.get(), 500,
-                                  std::string("{\"ok\":false,\"error\":\"") +
-                                      escape_json_string(error) + "\"}");
+                        send_json(client_socket->get(), 500,
+                                  json{{"ok", false}, {"error", error}}.dump());
                         return;
                     }
 
@@ -709,37 +599,39 @@ int WebChatServer::run(std::ostream& output) {
                     const HealthSnapshot health = build_health_snapshot(
                         agent_, agent_busy_.load(), approval_snapshot.has_pending_request,
                         capability_snapshot, last_self_check_at);
-                    send_json(client_socket.get(), 200,
-                              std::string("{\"ok\":true,\"health\":") + health_json(health) +
-                                  ",\"capabilities\":" + capabilities_json(capability_snapshot) +
-                                  "}");
+                    json result = {
+                        {"ok", true},
+                        {"health", health_json(health)},
+                        {"capabilities", capabilities_json(capability_snapshot)}
+                    };
+                    send_json(client_socket->get(), 200, result.dump());
                     return;
                 }
 
                 if (request.method == "POST" && request.path == "/api/approval") {
                     const bool approved = extract_json_bool_field(request.body, "approved");
                     if (!approval_provider_->resolve(approved)) {
-                        send_json(client_socket.get(), 409,
-                                  "{\"ok\":false,\"error\":\"No pending approval\"}");
+                        send_json(client_socket->get(), 409,
+                                  json{{"ok", false}, {"error", "No pending approval"}}.dump());
                         return;
                     }
-                    send_json(client_socket.get(), 200, "{\"ok\":true}");
+                    send_json(client_socket->get(), 200, json{{"ok", true}}.dump());
                     return;
                 }
 
-                // SSE streaming chat endpoint — real-time token passthrough
+                // SSE streaming chat endpoint -- real-time token passthrough
                 if (request.method == "POST" && request.path == "/api/chat/stream") {
                     const std::string message = extract_json_string_field(request.body, "message");
                     if (trim_copy(message).empty()) {
-                        send_json(client_socket.get(), 400,
-                                  "{\"ok\":false,\"error\":\"Message is empty\"}");
+                        send_json(client_socket->get(), 400,
+                                  json{{"ok", false}, {"error", "Message is empty"}}.dump());
                         return;
                     }
 
                     bool expected = false;
                     if (!agent_busy_.compare_exchange_strong(expected, true)) {
-                        send_json(client_socket.get(), 409,
-                                  "{\"ok\":false,\"error\":\"Agent is busy\"}");
+                        send_json(client_socket->get(), 409,
+                                  json{{"ok", false}, {"error", "Agent is busy"}}.dump());
                         return;
                     }
 
@@ -750,12 +642,12 @@ int WebChatServer::run(std::ostream& output) {
                     sse_header << "Cache-Control: no-cache\r\n";
                     sse_header << "Connection: keep-alive\r\n";
                     sse_header << "Access-Control-Allow-Origin: *\r\n\r\n";
-                    if (!send_all(client_socket.get(), sse_header.str())) {
+                    if (!send_all(client_socket->get(), sse_header.str())) {
                         agent_busy_.store(false);
                         return;
                     }
 
-                    SOCKET raw_socket = client_socket.get();
+                    SOCKET raw_socket = client_socket->get();
                     std::string reply;
                     std::string error;
                     std::vector<ExecutionStep> trace_snapshot;
@@ -765,7 +657,11 @@ int WebChatServer::run(std::ostream& output) {
                             reply = agent_.run_turn_streaming(message,
                                 [raw_socket](const std::string& token) {
                                     // SSE passthrough: forward each token as an SSE event
-                                    std::string sse_event = "data: " + escape_json_string(token) + "\n\n";
+                                    // Use json to properly escape the token for SSE data lines
+                                    std::string escaped = json(token).dump();
+                                    // Strip surrounding quotes from the dump
+                                    std::string sse_event = "data: " +
+                                        escaped.substr(1, escaped.size() - 2) + "\n\n";
                                     (void)send_all(raw_socket, sse_event);
                                 });
                             trace_snapshot = agent_.last_execution_trace();
@@ -782,12 +678,13 @@ int WebChatServer::run(std::ostream& output) {
 
                     // Send final event with trace and status
                     if (!error.empty()) {
+                        std::string escaped = json(error).dump();
                         std::string err_event = "event: error\ndata: " +
-                                                escape_json_string(error) + "\n\n";
+                                                escaped.substr(1, escaped.size() - 2) + "\n\n";
                         (void)send_all(raw_socket, err_event);
                     } else {
                         std::string done_event = "event: done\ndata: " +
-                            execution_trace_json(trace_snapshot) + "\n\n";
+                            execution_trace_json(trace_snapshot).dump() + "\n\n";
                         (void)send_all(raw_socket, done_event);
                     }
                     return;
@@ -797,15 +694,15 @@ int WebChatServer::run(std::ostream& output) {
                 if (request.method == "POST" && request.path == "/api/chat") {
                     const std::string message = extract_json_string_field(request.body, "message");
                     if (trim_copy(message).empty()) {
-                        send_json(client_socket.get(), 400,
-                                  "{\"ok\":false,\"error\":\"Message is empty\"}");
+                        send_json(client_socket->get(), 400,
+                                  json{{"ok", false}, {"error", "Message is empty"}}.dump());
                         return;
                     }
 
                     bool expected = false;
                     if (!agent_busy_.compare_exchange_strong(expected, true)) {
-                        send_json(client_socket.get(), 409,
-                                  "{\"ok\":false,\"error\":\"Agent is busy\"}");
+                        send_json(client_socket->get(), 409,
+                                  json{{"ok", false}, {"error", "Agent is busy"}}.dump());
                         return;
                     }
 
@@ -829,26 +726,26 @@ int WebChatServer::run(std::ostream& output) {
                     agent_busy_.store(false);
 
                     if (!error.empty()) {
-                        send_json(client_socket.get(), 500,
-                                  std::string("{\"ok\":false,\"error\":\"") +
-                                      escape_json_string(error) + "\"}");
+                        send_json(client_socket->get(), 500,
+                                  json{{"ok", false}, {"error", error}}.dump());
                         return;
                     }
 
-                    send_json(client_socket.get(), 200,
-                              std::string("{\"ok\":true,\"reply\":\"") +
-                                  escape_json_string(reply) + "\",\"trace\":" +
-                                  execution_trace_json(trace_snapshot) + "}");
+                    json result = {
+                        {"ok", true},
+                        {"reply", reply},
+                        {"trace", execution_trace_json(trace_snapshot)}
+                    };
+                    send_json(client_socket->get(), 200, result.dump());
                     return;
                 }
 
-                send_json(client_socket.get(), 404,
-                          "{\"ok\":false,\"error\":\"Route not found\"}");
+                send_json(client_socket->get(), 404,
+                          json{{"ok", false}, {"error", "Route not found"}}.dump());
             } catch (const std::exception& error) {
-                send_json(client_socket.get(), 500,
-                          std::string("{\"ok\":false,\"error\":\"") +
-                              escape_json_string(error.what()) + "\"}");
+                send_json(client_socket->get(), 500,
+                          json{{"ok", false}, {"error", error.what()}}.dump());
             }
-        }).detach();
+        });
     }
 }

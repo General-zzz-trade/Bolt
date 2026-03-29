@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "../agent/execution_step.h"
+#include "../core/threading/thread_pool.h"
 #include "agent_status.h"
+#include "rate_limiter.h"
 
 class Agent;
 class WebApprovalProvider;
@@ -34,6 +36,8 @@ private:
     std::vector<ExecutionStep> last_trace_snapshot_;
     std::vector<CapabilityState> capability_snapshot_;
     std::string last_self_check_at_;
+    ThreadPool thread_pool_;
+    RateLimiter rate_limiter_;
 };
 
 #endif

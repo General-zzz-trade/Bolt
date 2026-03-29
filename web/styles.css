@@ -49,3 +49,15 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .approval-card h3{margin-bottom:12px;color:var(--yellow)}
 .approval-card pre{background:var(--bg);padding:12px;border-radius:6px;font-size:12px;max-height:200px;overflow:auto;margin:8px 0}
 .approval-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+[data-theme="light"]{--bg:#ffffff;--surface:#f6f8fa;--surface2:#eaeef2;--border:#d0d7de;--text:#1f2328;--text2:#656d76;--accent:#0969da;--green:#1a7f37;--red:#cf222e;--yellow:#9a6700}
+@media(max-width:768px){
+  .shell{flex-direction:column}
+  .sidebar{width:100%;max-height:40vh;border-right:none;border-bottom:1px solid var(--border);overflow-y:auto}
+  .message{max-width:100%}
+  .approval-card{max-width:95%}
+}
+@media(max-width:480px){
+  .sidebar{padding:8px}
+  .composer{padding:8px 12px}
+  .msg-body pre{font-size:11px}
+}

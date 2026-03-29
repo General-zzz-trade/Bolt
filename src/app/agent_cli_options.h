@@ -8,6 +8,7 @@
 
 struct AgentCliOptions {
     bool debug = false;
+    bool resume = false;
     std::string model;
     std::string prompt;
 };

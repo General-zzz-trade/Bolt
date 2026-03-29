@@ -27,6 +27,7 @@ function appendMessage(role,text){
   }
   div.appendChild(body);
   messagesEl.appendChild(div);
+  while(messagesEl.children.length>200)messagesEl.removeChild(messagesEl.firstChild);
   messagesEl.scrollTop=messagesEl.scrollHeight;
   return body;
 }
@@ -117,3 +118,6 @@ async function poll(){
   }catch(e){}
 }
 poll();setInterval(poll,1500);
+const themeToggle=document.getElementById("theme-toggle");
+themeToggle.addEventListener("click",()=>{const c=document.documentElement.getAttribute("data-theme");const n=c==="light"?"dark":"light";document.documentElement.setAttribute("data-theme",n);localStorage.setItem("bolt-theme",n)});
+const savedTheme=localStorage.getItem("bolt-theme");if(savedTheme)document.documentElement.setAttribute("data-theme",savedTheme);

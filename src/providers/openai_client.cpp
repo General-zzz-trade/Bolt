@@ -161,6 +161,15 @@ ChatMessage OpenAiClient::parse_response(const std::string& body) const {
         }
     }
 
+    // Extract token usage
+    try {
+        if (j.contains("usage")) {
+            const auto& usage = j["usage"];
+            result.usage.input_tokens = usage.value("prompt_tokens", 0);
+            result.usage.output_tokens = usage.value("completion_tokens", 0);
+        }
+    } catch (...) {}
+
     return result;
 }
 
