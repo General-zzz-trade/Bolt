@@ -16,11 +16,24 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#define SOCKET int
+#define INVALID_SOCKET (-1)
+#define SOCKET_ERROR (-1)
+#define SOMAXCONN 128
+#define closesocket(s) close(s)
+using BOOL = int;
+#endif
 
 #include "../agent/agent.h"
 #include "agent_status.h"
@@ -36,6 +49,7 @@ struct HttpRequest {
     std::string body;
 };
 
+#ifdef _WIN32
 class WinSockSession {
 public:
     WinSockSession() {
@@ -45,11 +59,15 @@ public:
             throw std::runtime_error("WSAStartup failed");
         }
     }
-
-    ~WinSockSession() {
-        WSACleanup();
-    }
+    ~WinSockSession() { WSACleanup(); }
 };
+#else
+class WinSockSession {
+public:
+    WinSockSession() {}  // No-op on Linux/macOS
+    ~WinSockSession() {}
+};
+#endif
 
 class SocketHandle {
 public:
@@ -84,7 +102,7 @@ public:
     }
 
     bool valid() const {
-        return socket_ != INVALID_SOCKET;
+        return socket_ != static_cast<SOCKET>(INVALID_SOCKET);
     }
 
 private:
@@ -553,7 +571,7 @@ int WebChatServer::run(std::ostream& output) {
     address.sin_port = htons(port_);
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    const BOOL reuse = 1;
+    const int reuse = 1;
     setsockopt(listener.get(), SOL_SOCKET, SO_REUSEADDR,
                reinterpret_cast<const char*>(&reuse), sizeof(reuse));
 

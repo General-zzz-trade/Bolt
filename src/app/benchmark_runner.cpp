@@ -38,6 +38,15 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#elif defined(__linux__) || defined(__APPLE__)
+#include "../../src/platform/linux/linux_http_transport.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#define SOCKET int
+#define INVALID_SOCKET (-1)
+#define closesocket(s) close(s)
 #endif
 
 namespace {
@@ -180,6 +189,8 @@ ProviderBenchmark bench_provider(
     std::shared_ptr<IHttpTransport> transport;
 #ifdef _WIN32
     transport = std::make_shared<WinHttpTransport>();
+#elif defined(__linux__) || defined(__APPLE__)
+    transport = std::make_shared<LinuxHttpTransport>();
 #endif
 
     // Create client

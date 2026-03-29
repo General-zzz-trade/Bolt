@@ -82,8 +82,18 @@ if (WIN32)
     target_link_libraries(mini_nn PRIVATE user32 winhttp ws2_32)
 elseif (UNIX AND NOT APPLE)
     target_sources(mini_nn PRIVATE
-            src/platform/linux/linux_agent_factory.cpp
+        src/platform/linux/linux_agent_factory.cpp
+        src/platform/linux/linux_file_system.cpp
+        src/platform/linux/linux_command_runner.cpp
+        src/platform/linux/linux_process_manager.cpp
+        src/platform/linux/linux_http_transport.cpp
+        src/providers/openai_client.cpp
+        src/providers/claude_client.cpp
+        src/providers/gemini_client.cpp
+        src/providers/ollama_chat_client.cpp
+        src/app/model_client_factory.cpp
     )
+    target_link_libraries(mini_nn PRIVATE pthread)
 endif()
 
 add_executable(kernel_tests
@@ -155,8 +165,18 @@ if (WIN32)
     target_link_libraries(kernel_tests PRIVATE user32 winhttp)
 elseif (UNIX AND NOT APPLE)
     target_sources(kernel_tests PRIVATE
-            src/platform/linux/linux_agent_factory.cpp
+        src/platform/linux/linux_agent_factory.cpp
+        src/platform/linux/linux_file_system.cpp
+        src/platform/linux/linux_command_runner.cpp
+        src/platform/linux/linux_process_manager.cpp
+        src/platform/linux/linux_http_transport.cpp
+        src/providers/openai_client.cpp
+        src/providers/claude_client.cpp
+        src/providers/gemini_client.cpp
+        src/providers/ollama_chat_client.cpp
+        src/app/model_client_factory.cpp
     )
+    target_link_libraries(kernel_tests PRIVATE pthread)
 endif()
 
 add_test(NAME kernel_tests COMMAND kernel_tests)
