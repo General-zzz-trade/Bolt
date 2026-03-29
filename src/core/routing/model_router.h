@@ -55,12 +55,17 @@ private:
     Config config_;
     mutable std::string last_route_;
     mutable int consecutive_tool_calls_ = 0;
+    mutable bool failure_escalation_ = false;
 
     /// Decide which model to use based on conversation context.
     IModelClient& select(const std::vector<ChatMessage>& messages) const;
 
     /// Estimate complexity of the current turn.
     int estimate_complexity(const std::vector<ChatMessage>& messages) const;
+
+public:
+    /// Signal that failures have occurred and the router should escalate.
+    void request_failure_escalation() const { failure_escalation_ = true; }
 };
 
 #endif

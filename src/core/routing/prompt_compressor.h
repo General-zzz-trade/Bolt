@@ -22,6 +22,8 @@ public:
         std::size_t max_total_chars = 0;              // 0 = no cap (lossless)
         bool collapse_tool_results = false;           // Don't merge (lossless)
         bool deduplicate_whitespace = true;           // Remove redundant blank lines
+        bool summarize_old_tool_results = true;       // Summarize old tool results
+        std::size_t recent_tool_results_to_keep = 6;  // Keep last N tool results in full
     };
 
     PromptCompressor();
@@ -37,7 +39,9 @@ private:
     Config config_;
 
     std::string truncate_tool_result(const std::string& content) const;
+    static std::string summarize_tool_result(const std::string& content, const std::string& tool_name);
     std::vector<ChatMessage> trim_history(const std::vector<ChatMessage>& messages) const;
+    std::vector<ChatMessage> summarize_old_results(std::vector<ChatMessage> messages) const;
 };
 
 #endif

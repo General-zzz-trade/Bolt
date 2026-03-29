@@ -219,6 +219,10 @@ void apply_config_entry(AppConfig* config, const std::string& key, const std::st
         config->agent_runtime.history_byte_budget = parse_size(key, value);
         return;
     }
+    if (key == "agent.max_consecutive_failures") {
+        config->agent_runtime.max_consecutive_failures = parse_int(key, value);
+        return;
+    }
     if (key == "approval.mode") {
         config->approval.mode = parse_approval_mode(key, value);
         return;

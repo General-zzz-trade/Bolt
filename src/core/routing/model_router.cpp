@@ -86,11 +86,15 @@ IModelClient& ModelRouter::select(const std::vector<ChatMessage>& messages) cons
     const bool is_first_turn = messages.size() <= 2;  // system + user
     const bool high_complexity = complexity > config_.complexity_threshold;
     const bool too_many_tool_calls = consecutive_tool_calls_ >= config_.max_fast_tool_calls;
+    const bool failure_recovery = failure_escalation_;
 
-    if (is_first_turn || high_complexity || too_many_tool_calls) {
+    if (is_first_turn || high_complexity || too_many_tool_calls || failure_recovery) {
         last_route_ = "strong:" + strong_->model();
         if (too_many_tool_calls) {
             consecutive_tool_calls_ = 0;  // Reset after escalation
+        }
+        if (failure_recovery) {
+            failure_escalation_ = false;  // Reset after one escalated turn
         }
         return *strong_;
     }
@@ -131,8 +135,21 @@ int ModelRouter::estimate_complexity(const std::vector<ChatMessage>& messages) c
 
     // If the last message is a tool result, it's likely a simple routing decision
     if (!messages.empty() && messages.back().role == ChatRole::tool) {
-        score = std::max(0, score - 50);
+        const std::string& last_content = messages.back().content;
+        // Error recovery requires stronger reasoning
+        if (last_content.rfind("TOOL_ERROR", 0) == 0) {
+            score += 40;
+        } else {
+            score = std::max(0, score - 50);
+        }
     }
+
+    // Deep in a task (many tool results) → prefer strong model
+    int tool_count = 0;
+    for (const auto& msg : messages) {
+        if (msg.role == ChatRole::tool) ++tool_count;
+    }
+    if (tool_count > 8) score += 20;
 
     return score;
 }

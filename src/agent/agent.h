@@ -25,6 +25,7 @@
 #include "../core/caching/tool_result_cache.h"
 #include "action.h"
 #include "execution_step.h"
+#include "failure_tracker.h"
 #include "message.h"
 #include "permission_policy.h"
 #include "task_runner.h"
@@ -78,6 +79,7 @@ private:
     bool debug_;
     TraceObserver trace_observer_;
 
+    FailureTracker failure_tracker_;
     ThreadPool thread_pool_;
     FileIndex file_index_;
     FilePrefetchCache prefetch_cache_;

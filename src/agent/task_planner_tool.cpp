@@ -3,6 +3,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "swarm_coordinator.h"
+
 namespace {
 
 std::string trim(const std::string& s) {
@@ -13,12 +15,22 @@ std::string trim(const std::string& s) {
 
 }  // namespace
 
+TaskPlannerTool::~TaskPlannerTool() = default;
+
 std::string TaskPlannerTool::name() const { return "task_planner"; }
 
+void TaskPlannerTool::set_swarm_support(ThreadPool* pool, AgentFactory factory) {
+    if (pool && factory) {
+        swarm_ = std::make_unique<SwarmCoordinator>(*pool, std::move(factory));
+    }
+}
+
 std::string TaskPlannerTool::description() const {
-    return "Plan and track multi-step tasks. Use 'plan: <description>' to create a plan, "
-           "'done: <step_number>' to mark a step complete, 'status' to view progress. "
-           "Always create a plan before starting complex tasks.";
+    return "Plan and track multi-step tasks. Commands: "
+           "'plan:<steps>' to create a plan, "
+           "'done:<step_number>' to mark complete, "
+           "'status' to view progress, "
+           "'parallel:<task1>\\n<task2>' to run sub-tasks concurrently.";
 }
 
 ToolSchema TaskPlannerTool::schema() const {
@@ -59,7 +71,19 @@ ToolResult TaskPlannerTool::run(const std::string& args) const {
         return handle_status();
     }
 
-    return {false, "Unknown command. Use: plan:<task>, done:<step>, or status"};
+    if (input.rfind("parallel:", 0) == 0 || input.rfind("parallel=", 0) == 0 ||
+        input.rfind("command=parallel:", 0) == 0) {
+        std::string tasks_text = input;
+        for (const char* prefix : {"command=parallel:", "parallel:", "parallel="}) {
+            if (tasks_text.rfind(prefix, 0) == 0) {
+                tasks_text = trim(tasks_text.substr(std::string(prefix).size()));
+                break;
+            }
+        }
+        return handle_parallel(tasks_text);
+    }
+
+    return {false, "Unknown command. Use: plan:<task>, done:<step>, status, or parallel:<tasks>"};
 }
 
 ToolResult TaskPlannerTool::handle_plan(const std::string& task) const {
@@ -159,6 +183,58 @@ ToolResult TaskPlannerTool::handle_status() const {
     }
     result << "\nProgress: " << done << "/" << steps_.size() << " steps complete\n";
 
+    return {true, result.str()};
+}
+
+ToolResult TaskPlannerTool::handle_parallel(const std::string& tasks_text) const {
+    if (!swarm_) {
+        return {false, "Parallel execution is not available. "
+                       "No agent factory configured for worker agents."};
+    }
+
+    // Parse newline-separated task descriptions
+    std::vector<SwarmCoordinator::SubTask> sub_tasks;
+    std::istringstream lines(tasks_text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        line = trim(line);
+        if (line.empty()) continue;
+        // Strip leading numbering
+        if (line.size() > 2 && line[1] == '.' && line[0] >= '0' && line[0] <= '9') {
+            line = trim(line.substr(2));
+        } else if (line.rfind("- ", 0) == 0) {
+            line = trim(line.substr(2));
+        }
+        if (!line.empty()) {
+            sub_tasks.push_back({line, ""});
+        }
+    }
+
+    if (sub_tasks.empty()) {
+        return {false, "No tasks provided. Format: parallel:<task1>\\n<task2>\\n..."};
+    }
+
+    std::ostringstream result;
+    result << "PARALLEL EXECUTION: " << sub_tasks.size() << " sub-tasks\n\n";
+
+    const auto results = swarm_->execute_parallel(sub_tasks);
+
+    int succeeded = 0;
+    for (std::size_t i = 0; i < results.size(); ++i) {
+        result << "--- Task " << (i + 1) << ": " << results[i].description << " ---\n";
+        result << "Status: " << (results[i].success ? "OK" : "FAILED") << "\n";
+        // Truncate long results
+        const std::string& content = results[i].result;
+        if (content.size() > 500) {
+            result << content.substr(0, 500) << "\n... (truncated)\n";
+        } else {
+            result << content << "\n";
+        }
+        result << "\n";
+        if (results[i].success) ++succeeded;
+    }
+
+    result << "SUMMARY: " << succeeded << "/" << results.size() << " tasks succeeded\n";
     return {true, result.str()};
 }
 

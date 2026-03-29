@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "build_and_test_tool.h"
+#include "swarm_coordinator.h"
 #include "calculator_tool.h"
 #include "click_element_tool.h"
 #include "code_intel_tool.h"

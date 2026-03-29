@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "action_parser.h"
+#include "workspace_prompt.h"
 
 namespace {
 
@@ -92,6 +93,7 @@ Agent::Agent(std::unique_ptr<IModelClient> client,
       workspace_root_(std::filesystem::weakly_canonical(std::move(workspace_root))),
       runtime_config_(std::move(runtime_config)),
       debug_(debug),
+      failure_tracker_(runtime_config_.max_consecutive_failures),
       thread_pool_(std::max(2u, std::thread::hardware_concurrency())),
       prefetch_cache_(thread_pool_) {
     if (client_ == nullptr) {
@@ -490,6 +492,13 @@ std::vector<ChatMessage> Agent::build_chat_messages() const {
     system_prompt << "- When you complete a task, summarize what you did and the verification result.\n";
     system_prompt << "- If multiple tool calls are needed, make them all in one turn when possible.\n";
 
+    // Load workspace-specific instructions (bolt.md or .bolt/prompt.md)
+    const std::string workspace_prompt = load_workspace_prompt(workspace_root_);
+    if (!workspace_prompt.empty()) {
+        system_prompt << "\n# Project Instructions\n";
+        system_prompt << workspace_prompt << "\n";
+    }
+
     messages.push_back({ChatRole::system, system_prompt.str()});
 
     // Convert history
@@ -694,10 +703,27 @@ std::string Agent::run_turn_structured(const std::string& user_input,
 
             push_history({"tool", history_content, history_name});
 
+            // Track failures for recovery
+            if (results[i].step.status == ExecutionStepStatus::failed ||
+                results[i].step.status == ExecutionStepStatus::blocked ||
+                results[i].step.status == ExecutionStepStatus::denied) {
+                failure_tracker_.record_failure(actions[i].tool_name,
+                    results[i].observation.content.substr(0, 200));
+            } else {
+                failure_tracker_.record_success();
+            }
+
             if (results[i].should_return_reply && !should_return) {
                 should_return = true;
                 early_reply = results[i].reply;
             }
+        }
+
+        // Inject recovery guidance if stuck in a failure loop
+        if (failure_tracker_.is_stuck()) {
+            const std::string diagnostic = failure_tracker_.diagnostic();
+            log_debug("Failure Recovery", diagnostic);
+            push_history({"system", diagnostic, ""});
         }
 
         if (should_return) {

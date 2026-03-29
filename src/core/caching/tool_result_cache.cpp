@@ -23,9 +23,25 @@ void ToolResultCache::put(const std::string& tool_name, const std::string& args,
     cache_[key] = {success, content, std::chrono::steady_clock::now()};
 }
 
+void ToolResultCache::record_failure(const std::string& tool_name,
+                                      const std::string& args) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string key = make_key(tool_name, args);
+    ++failure_counts_[key];
+}
+
+int ToolResultCache::failure_count(const std::string& tool_name,
+                                    const std::string& args) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string key = make_key(tool_name, args);
+    auto it = failure_counts_.find(key);
+    return it != failure_counts_.end() ? it->second : 0;
+}
+
 void ToolResultCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     cache_.clear();
+    failure_counts_.clear();
 }
 
 std::size_t ToolResultCache::size() const {

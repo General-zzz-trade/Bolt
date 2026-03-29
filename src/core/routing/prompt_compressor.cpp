@@ -14,7 +14,12 @@ std::vector<ChatMessage> PromptCompressor::compress(
     // Step 1: Trim to max history window (preserves all recent context)
     std::vector<ChatMessage> result = trim_history(messages);
 
-    // Step 2: Lossless truncation only if configured (default: off)
+    // Step 2: Summarize old tool results (keep recent ones in full)
+    if (config_.summarize_old_tool_results) {
+        result = summarize_old_results(std::move(result));
+    }
+
+    // Step 3: Lossless truncation only if configured (default: off)
     if (config_.max_tool_result_chars > 0) {
         for (auto& msg : result) {
             if (msg.role == ChatRole::tool) {
@@ -23,7 +28,7 @@ std::vector<ChatMessage> PromptCompressor::compress(
         }
     }
 
-    // Step 3: Deduplicate whitespace (lossless — removes only redundant blank lines)
+    // Step 4: Deduplicate whitespace (lossless — removes only redundant blank lines)
     if (config_.deduplicate_whitespace) {
         for (auto& msg : result) {
             std::string& content = msg.content;
@@ -46,7 +51,7 @@ std::vector<ChatMessage> PromptCompressor::compress(
         }
     }
 
-    // Step 4: Hard cap only if configured (default: off for lossless)
+    // Step 5: Hard cap only if configured (default: off for lossless)
     if (config_.max_total_chars > 0) {
         std::size_t total_chars = 0;
         for (const auto& msg : result) {
@@ -86,6 +91,92 @@ std::string PromptCompressor::truncate_tool_result(const std::string& content) c
     const std::size_t keep = config_.max_tool_result_chars - 40;
     return content.substr(0, keep) + "\n... (truncated " +
            std::to_string(content.size() - keep) + " chars)";
+}
+
+std::string PromptCompressor::summarize_tool_result(const std::string& content,
+                                                    const std::string& tool_name) {
+    // Extract the status line
+    const bool is_error = content.rfind("TOOL_ERROR", 0) == 0;
+    const bool is_policy = content.rfind("POLICY_DENY", 0) == 0;
+    const bool is_approval = content.rfind("APPROVAL_DENY", 0) == 0;
+
+    if (is_error) {
+        // Keep the error status + first few lines of the error message
+        std::string summary = "TOOL_ERROR [" + tool_name + "]: ";
+        const auto first_nl = content.find('\n');
+        if (first_nl == std::string::npos) return content;
+
+        // Extract error-relevant lines (lines containing "error", "fail", "not found")
+        std::istringstream lines(content.substr(first_nl + 1));
+        std::string line;
+        int kept = 0;
+        while (std::getline(lines, line) && kept < 5) {
+            // Keep lines that look like error messages
+            const std::string lower = [&]() {
+                std::string s = line;
+                for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                return s;
+            }();
+            if (lower.find("error") != std::string::npos ||
+                lower.find("fail") != std::string::npos ||
+                lower.find("not found") != std::string::npos ||
+                lower.find("exception") != std::string::npos ||
+                kept == 0) {  // Always keep first line
+                summary += line + "\n";
+                ++kept;
+            }
+        }
+        return summary;
+    }
+
+    if (is_policy || is_approval) {
+        // Keep denial messages in full (they're short)
+        return content;
+    }
+
+    // TOOL_OK — summarize to status + first line of content
+    std::string summary = "TOOL_OK [" + tool_name + "]";
+    const auto first_nl = content.find('\n');
+    if (first_nl != std::string::npos && first_nl + 1 < content.size()) {
+        const auto second_nl = content.find('\n', first_nl + 1);
+        const std::string first_line = content.substr(first_nl + 1,
+            second_nl == std::string::npos ? std::string::npos : second_nl - first_nl - 1);
+        if (!first_line.empty()) {
+            summary += ": " + first_line;
+        }
+        const auto remaining = content.size() - first_nl;
+        if (remaining > 200) {
+            summary += " (..." + std::to_string(remaining) + " chars omitted)";
+        }
+    }
+    return summary;
+}
+
+std::vector<ChatMessage> PromptCompressor::summarize_old_results(
+    std::vector<ChatMessage> messages) const {
+    // Count tool messages from the end to find which ones are "recent"
+    std::size_t tool_count = 0;
+    std::vector<bool> is_recent(messages.size(), false);
+
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        if (it->role == ChatRole::tool) {
+            ++tool_count;
+            if (tool_count <= config_.recent_tool_results_to_keep) {
+                is_recent[std::distance(messages.begin(),
+                    std::next(it).base())] = true;
+            }
+        }
+    }
+
+    // Summarize old tool results
+    for (std::size_t i = 0; i < messages.size(); ++i) {
+        if (messages[i].role == ChatRole::tool && !is_recent[i]) {
+            messages[i].content = summarize_tool_result(
+                messages[i].content, messages[i].name);
+        }
+    }
+
+    return messages;
 }
 
 std::vector<ChatMessage> PromptCompressor::trim_history(

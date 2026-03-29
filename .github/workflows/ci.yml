@@ -59,12 +59,43 @@ jobs:
 
       - name: Run kernel tests
         run: ./build/kernel_tests
-        continue-on-error: true
+
+      - name: Run integration tests
+        run: ./build/agent_integration_tests
 
       - name: Run capability tests
         run: ./build/capability_tests
         timeout-minutes: 2
-        continue-on-error: true
+
+  sanitizer-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+
+      - name: Configure CMake with sanitizers
+        run: cmake -B build -S . -DENABLE_SANITIZERS=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run kernel tests
+        run: ./build/kernel_tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+
+      - name: Run integration tests
+        run: ./build/agent_integration_tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+
+      - name: Run capability tests
+        run: ./build/capability_tests
+        timeout-minutes: 5
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
 
   build-macos:
     runs-on: macos-latest
@@ -76,3 +107,13 @@ jobs:
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Run kernel tests
+        run: ./build/kernel_tests
+
+      - name: Run integration tests
+        run: ./build/agent_integration_tests
+
+      - name: Run capability tests
+        run: ./build/capability_tests
+        timeout-minutes: 2

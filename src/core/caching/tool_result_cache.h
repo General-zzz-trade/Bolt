@@ -32,6 +32,12 @@ public:
     void put(const std::string& tool_name, const std::string& args,
              bool success, const std::string& content);
 
+    /// Record a tool call failure for deduplication.
+    void record_failure(const std::string& tool_name, const std::string& args);
+
+    /// Get how many times this exact call has failed recently.
+    int failure_count(const std::string& tool_name, const std::string& args) const;
+
     /// Clear all cached entries.
     void clear();
 
@@ -48,6 +54,7 @@ private:
     int ttl_seconds_;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, Entry> cache_;
+    std::unordered_map<std::string, int> failure_counts_;
     mutable std::size_t hits_ = 0;
     mutable std::size_t misses_ = 0;
 

@@ -8,6 +8,7 @@ struct AgentRuntimeConfig {
     int max_model_steps = 50;              // was 5 — allow long autonomous tasks
     std::size_t history_window = 80;       // was 12 — keep much more context
     std::size_t history_byte_budget = 128000;  // was 16KB — 128KB context budget
+    int max_consecutive_failures = 3;      // inject recovery guidance after N failures
 };
 
 #endif
