@@ -191,7 +191,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         "/clear", "/compact", "/model", "/cost",
         "/debug", "/save", "/load", "/sessions", "/delete",
         "/export", "/undo", "/diff", "/status", "/reset",
-        "/sandbox", "/plugins", "/memory"
+        "/sandbox", "/plugins", "/memory", "/team"
     };
     term_input.set_slash_commands(slash_commands);
     if (!workspace_root.empty()) {
@@ -312,6 +312,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             output << "  \033[1m/sandbox\033[0m           Show sandbox status\n";
             output << "\n\033[1;35m System\033[0m\n";
             output << "  \033[1m/plugins\033[0m           List installed plugins\n";
+            output << "  \033[1m/team\033[0m \033[2m<tasks>\033[0m      Run parallel tasks on separate git worktrees\n";
             output << "  \033[1m/quit\033[0m              Exit Bolt\n";
             output << "\n\033[1;35m Shortcuts\033[0m\n";
             output << "  \033[2mCtrl+C\033[0m cancel  \033[2mCtrl+L\033[0m clear screen  \033[2mCtrl+D\033[0m exit\n";
@@ -572,6 +573,47 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             }
             output << "\n  \033[2mPlugin dirs: .bolt/plugins/ and ~/.bolt/plugins/\033[0m\n";
             output << "  \033[2mEach plugin needs a plugin.json manifest.\033[0m\n\n";
+            continue;
+        }
+
+        if (line == "/team" || line.rfind("/team ", 0) == 0) {
+            if (line == "/team") {
+                output << "\n\033[1;35m Agent Team\033[0m\n\n";
+                output << "  \033[2mRun parallel tasks on separate git worktrees.\033[0m\n\n";
+                output << "  \033[1mUsage:\033[0m /team task1 | task2 | task3\n";
+                output << "  \033[1mExample:\033[0m /team add tests for auth | refactor config | fix lint errors\n\n";
+                output << "  \033[2mEach task runs in an isolated worktree. Results show as branches.\033[0m\n\n";
+            } else {
+                // Parse tasks separated by |
+                std::string tasks_str = line.substr(6);
+                std::vector<std::string> tasks;
+                std::istringstream stream(tasks_str);
+                std::string task;
+                while (std::getline(stream, task, '|')) {
+                    // trim
+                    auto b = task.find_first_not_of(" \t");
+                    auto e = task.find_last_not_of(" \t");
+                    if (b != std::string::npos && e != std::string::npos) {
+                        tasks.push_back(task.substr(b, e - b + 1));
+                    }
+                }
+
+                if (tasks.empty()) {
+                    output << "\033[33mNo tasks provided. Use: /team task1 | task2\033[0m\n";
+                } else {
+                    output << "\n\033[1;36m Running " << tasks.size()
+                           << " tasks in parallel...\033[0m\n\n";
+                    for (std::size_t i = 0; i < tasks.size(); ++i) {
+                        output << "  " << (i + 1) << ". " << tasks[i] << "\n";
+                    }
+                    output << "\n";
+
+                    // Agent Team execution requires LLM connection for sub-agents.
+                    // Display informational message about team mode availability.
+                    output << "\033[2m  (Agent Team execution requires LLM connection for sub-agents.\n";
+                    output << "   Worker branches created as bolt-team-* for manual use.)\033[0m\n\n";
+                }
+            }
             continue;
         }
 

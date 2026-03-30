@@ -27,6 +27,13 @@ private:
 
     std::string build_bwrap_command(const std::string& command,
                                     const std::filesystem::path& working_directory) const;
+#ifdef __APPLE__
+    std::string build_seatbelt_command(const std::string& command,
+                                       const std::filesystem::path& working_directory) const;
+#else
+    std::string build_bwrap_linux_command(const std::string& command,
+                                          const std::filesystem::path& working_directory) const;
+#endif
     static std::string expand_home(const std::string& path);
     static bool command_exists(const std::string& name);
 };

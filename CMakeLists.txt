@@ -29,6 +29,7 @@ add_library(bolt_core STATIC
         src/core/net/sse_parser.cpp
         src/agent/agent.cpp
         src/agent/action_parser.cpp
+        src/agent/browser_tool.cpp
         src/agent/build_and_test_tool.cpp
         src/agent/calculator_tool.cpp
         src/agent/click_element_tool.cpp

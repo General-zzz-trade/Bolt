@@ -17,6 +17,7 @@ struct PolicyConfig {
         "task_planner",
         "code_intel",
         "git",
+        "browser",
         "web_fetch",
         "web_search",
     };

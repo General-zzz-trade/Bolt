@@ -25,6 +25,7 @@
 #include "task_planner_tool.h"
 #include "type_text_tool.h"
 #include "wait_for_window_tool.h"
+#include "browser_tool.h"
 #include "web_fetch_tool.h"
 #include "web_search_tool.h"
 #include "write_file_tool.h"
@@ -78,6 +79,7 @@ ToolRegistry create_default_tool_registry(
         tools.register_tool(std::make_unique<ClickElementTool>(ui_automation, audit_logger));
         tools.register_tool(std::make_unique<TypeTextTool>(ui_automation, audit_logger));
     }
+    tools.register_tool(std::make_unique<BrowserTool>(workspace_root, command_runner));
     if (http_transport != nullptr) {
         tools.register_tool(std::make_unique<WebFetchTool>(http_transport));
         tools.register_tool(std::make_unique<WebSearchTool>(http_transport));

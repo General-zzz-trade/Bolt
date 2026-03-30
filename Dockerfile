@@ -1,7 +1,7 @@
 FROM ubuntu:22.04 AS builder
 
 RUN apt-get update && apt-get install -y \
-    build-essential cmake curl && \
+    build-essential cmake libcurl4-openssl-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -13,7 +13,7 @@ RUN cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && \
 FROM ubuntu:22.04
 
 RUN apt-get update && apt-get install -y \
-    curl ca-certificates && \
+    libcurl4 ca-certificates bubblewrap git && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/build/bolt /usr/local/bin/bolt
