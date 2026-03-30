@@ -34,7 +34,8 @@ std::unique_ptr<Agent> create_agent(const std::filesystem::path& workspace_root,
                                                       config.command_policy,
                                                       services.process_manager,
                                                       services.ui_automation,
-                                                      services.window_controller);
+                                                      services.window_controller,
+                                                      services.http_transport);
 
     return std::make_unique<Agent>(std::move(services.model_client),
                                    std::move(services.approval_provider),

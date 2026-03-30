@@ -45,7 +45,7 @@ using json = nlohmann::json;
 
 namespace {
 
-struct HttpRequest {
+struct WebRequest {
     std::string method;
     std::string path;
     std::unordered_map<std::string, std::string> headers;
@@ -199,7 +199,7 @@ std::size_t content_length_from_headers(
     }
 }
 
-HttpRequest read_request(SOCKET socket) {
+WebRequest read_request(SOCKET socket) {
     std::string raw;
     std::array<char, 4096> buffer{};
     while (raw.find("\r\n\r\n") == std::string::npos) {
@@ -227,7 +227,7 @@ HttpRequest read_request(SOCKET socket) {
     }
 
     std::istringstream request_line_stream(request_line);
-    HttpRequest request;
+    WebRequest request;
     std::string version;
     request_line_stream >> request.method >> request.path >> version;
     if (request.method.empty() || request.path.empty()) {
@@ -478,7 +478,7 @@ int WebChatServer::run(std::ostream& output) {
 
         thread_pool_.submit([this, client_socket = std::make_shared<SocketHandle>(std::move(client))]() {
             try {
-                const HttpRequest request = read_request(client_socket->get());
+                const WebRequest request = read_request(client_socket->get());
 
                 // Rate limit check
                 if (!rate_limiter_.allow()) {

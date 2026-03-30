@@ -30,6 +30,7 @@ AgentServices create_windows_agent_services(const AppConfig& config,
     services.approval_provider = create_approval_provider(config.approval, input, output);
 
     auto transport = std::make_shared<WinHttpTransport>();
+    services.http_transport = transport;
     services.model_client = create_model_client(config, options.model, transport);
     if (services.model_client == nullptr) {
         // Fallback: legacy Ollama generate client

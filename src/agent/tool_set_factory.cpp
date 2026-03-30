@@ -23,6 +23,8 @@
 #include "task_planner_tool.h"
 #include "type_text_tool.h"
 #include "wait_for_window_tool.h"
+#include "web_fetch_tool.h"
+#include "web_search_tool.h"
 #include "write_file_tool.h"
 
 ToolRegistry create_default_tool_registry(
@@ -33,7 +35,8 @@ ToolRegistry create_default_tool_registry(
     CommandPolicyConfig command_policy,
     const std::shared_ptr<IProcessManager>& process_manager,
     const std::shared_ptr<IUiAutomation>& ui_automation,
-    const std::shared_ptr<IWindowController>& window_controller) {
+    const std::shared_ptr<IWindowController>& window_controller,
+    const std::shared_ptr<IHttpTransport>& http_transport) {
     if (file_system == nullptr) {
         throw std::invalid_argument("Tool set factory requires a file system");
     }
@@ -72,6 +75,10 @@ ToolRegistry create_default_tool_registry(
         tools.register_tool(std::make_unique<InspectUiTool>(ui_automation));
         tools.register_tool(std::make_unique<ClickElementTool>(ui_automation, audit_logger));
         tools.register_tool(std::make_unique<TypeTextTool>(ui_automation, audit_logger));
+    }
+    if (http_transport != nullptr) {
+        tools.register_tool(std::make_unique<WebFetchTool>(http_transport));
+        tools.register_tool(std::make_unique<WebSearchTool>(http_transport));
     }
     return tools;
 }

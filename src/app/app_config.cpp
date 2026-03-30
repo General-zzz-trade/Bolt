@@ -226,6 +226,14 @@ void apply_config_entry(AppConfig* config, const std::string& key, const std::st
         config->agent_runtime.max_consecutive_failures = parse_int(key, value);
         return;
     }
+    if (key == "agent.auto_verify") {
+        config->agent_runtime.auto_verify = parse_bool(key, value);
+        return;
+    }
+    if (key == "agent.max_auto_verify_retries") {
+        config->agent_runtime.max_auto_verify_retries = parse_int(key, value);
+        return;
+    }
     if (key == "approval.mode") {
         config->approval.mode = parse_approval_mode(key, value);
         return;
@@ -329,6 +337,9 @@ void load_environment_overrides(AppConfig* config) {
     apply_env_override(config, "BOLT_AGENT_HISTORY_WINDOW", "agent.history_window");
     apply_env_override(config, "BOLT_AGENT_HISTORY_BYTE_BUDGET",
                        "agent.history_byte_budget");
+    apply_env_override(config, "BOLT_AGENT_AUTO_VERIFY", "agent.auto_verify");
+    apply_env_override(config, "BOLT_AGENT_MAX_AUTO_VERIFY_RETRIES",
+                       "agent.max_auto_verify_retries");
     apply_env_override(config, "BOLT_APPROVAL_MODE", "approval.mode");
 }
 

@@ -28,6 +28,7 @@ AgentServices create_linux_agent_services(const AppConfig& config,
     services.approval_provider = create_approval_provider(config.approval, input, output);
 
     auto transport = std::make_shared<LinuxHttpTransport>();
+    services.http_transport = transport;
     services.model_client = create_model_client(config, options.model, transport);
     if (services.model_client == nullptr) {
         // Fallback: create Ollama chat client directly

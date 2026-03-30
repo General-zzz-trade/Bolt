@@ -95,6 +95,7 @@ private:
     bool debug_;
     TraceObserver trace_observer_;
 
+    int auto_verify_count_ = 0;
     FailureTracker failure_tracker_;
     ThreadPool thread_pool_;
     FileIndex file_index_;

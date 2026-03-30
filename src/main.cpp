@@ -108,7 +108,8 @@ int run_mcp_server() {
     auto tools = create_default_tool_registry(
         workspace_root, services.file_system, services.command_runner,
         services.audit_logger, config.command_policy,
-        services.process_manager, services.ui_automation, services.window_controller);
+        services.process_manager, services.ui_automation, services.window_controller,
+        services.http_transport);
 
     McpServer server;
     for (const Tool* tool : tools.list()) {

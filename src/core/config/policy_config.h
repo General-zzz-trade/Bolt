@@ -17,6 +17,8 @@ struct PolicyConfig {
         "task_planner",
         "code_intel",
         "git",
+        "web_fetch",
+        "web_search",
     };
 
     std::unordered_set<std::string> bounded_write_tools = {

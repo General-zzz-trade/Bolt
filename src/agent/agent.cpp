@@ -531,6 +531,13 @@ std::vector<ChatMessage> Agent::build_chat_messages() const {
     system_prompt << "  Commands: plan:<steps>, done:<step_number>, status\n";
     system_prompt << "- calculator: Evaluate arithmetic expressions.\n\n";
 
+    // Auto-verify
+    if (runtime_config_.auto_verify) {
+        system_prompt << "# Auto-Verify\n";
+        system_prompt << "After you edit code, the system automatically runs build_and_test. ";
+        system_prompt << "If it fails, you will see the error output and should fix it immediately.\n\n";
+    }
+
     // Error handling
     system_prompt << "# Error Handling\n";
     system_prompt << "- If a tool returns an error, analyze the error message carefully.\n";
@@ -598,6 +605,7 @@ std::string Agent::run_turn_structured(const std::string& user_input,
                                        StreamCallback on_token) {
     last_execution_trace_.clear();
     notify_trace_updated();
+    auto_verify_count_ = 0;
     push_history({"user", user_input, ""});
 
     TaskRunner task_runner(
@@ -790,6 +798,71 @@ std::string Agent::run_turn_structured(const std::string& user_input,
         if (should_return) {
             push_history({"assistant", early_reply, ""});
             return early_reply;
+        }
+
+        // Auto-verify: if code was modified, run build_and_test automatically
+        if (runtime_config_.auto_verify &&
+            auto_verify_count_ < runtime_config_.max_auto_verify_retries) {
+            bool code_modified = false;
+            for (std::size_t i = 0; i < actions.size(); ++i) {
+                const std::string& tname = actions[i].tool_name;
+                if ((tname == "edit_file" || tname == "write_file" || tname == "delete_file") &&
+                    results[i].observation.success) {
+                    code_modified = true;
+                    break;
+                }
+            }
+
+            if (code_modified) {
+                const Tool* build_tool = tools_.find("build_and_test");
+                if (build_tool) {
+                    log_debug("Auto-Verify", "Running build_and_test after code modification (attempt " +
+                              std::to_string(auto_verify_count_ + 1) + "/" +
+                              std::to_string(runtime_config_.max_auto_verify_retries) + ")");
+
+                    try {
+                        ToolResult verify_result = build_tool->run("auto");
+
+                        ExecutionStep verify_step;
+                        verify_step.index = last_execution_trace_.size() + 1;
+                        verify_step.tool_name = "build_and_test";
+                        verify_step.args = "auto";
+                        verify_step.reason = "Auto-verify after code edit";
+                        verify_step.risk = "low";
+
+                        if (!verify_result.success) {
+                            ++auto_verify_count_;
+                            verify_step.status = ExecutionStepStatus::failed;
+                            verify_step.detail = "Build/test failed: " +
+                                verify_result.content.substr(0, 200);
+                            last_execution_trace_.push_back(verify_step);
+                            notify_trace_updated();
+
+                            // Inject error into history so model sees it and fixes
+                            std::string error_msg =
+                                "AUTO_VERIFY: build_and_test failed after your edit (attempt " +
+                                std::to_string(auto_verify_count_) + "/" +
+                                std::to_string(runtime_config_.max_auto_verify_retries) +
+                                "). Fix the issue.\nError:\n" + verify_result.content;
+                            push_history({"system", error_msg, ""});
+
+                            // Let the loop continue so model can fix
+                            continue;
+                        } else {
+                            verify_step.status = ExecutionStepStatus::completed;
+                            verify_step.detail = "Build/test passed";
+                            last_execution_trace_.push_back(verify_step);
+                            notify_trace_updated();
+
+                            push_history({"tool", "TOOL_OK\nAUTO_VERIFY: build_and_test passed.",
+                                          "build_and_test"});
+                            auto_verify_count_ = 0;
+                        }
+                    } catch (const std::exception& e) {
+                        log_debug("Auto-Verify Error", e.what());
+                    }
+                }
+            }
         }
     }
 

@@ -9,6 +9,8 @@ struct AgentRuntimeConfig {
     std::size_t history_window = 80;       // was 12 — keep much more context
     std::size_t history_byte_budget = 128000;  // was 16KB — 128KB context budget
     int max_consecutive_failures = 3;      // inject recovery guidance after N failures
+    bool auto_verify = true;               // auto-run build_and_test after code edits
+    int max_auto_verify_retries = 3;       // max auto-verify attempts per turn
 };
 
 #endif

@@ -8,6 +8,7 @@
 #include "../core/interfaces/audit_logger.h"
 #include "../core/interfaces/command_runner.h"
 #include "../core/interfaces/file_system.h"
+#include "../core/interfaces/http_transport.h"
 #include "../core/interfaces/process_manager.h"
 #include "../core/interfaces/ui_automation.h"
 #include "../core/interfaces/window_controller.h"
@@ -21,6 +22,7 @@ ToolRegistry create_default_tool_registry(
     CommandPolicyConfig command_policy = {},
     const std::shared_ptr<IProcessManager>& process_manager = nullptr,
     const std::shared_ptr<IUiAutomation>& ui_automation = nullptr,
-    const std::shared_ptr<IWindowController>& window_controller = nullptr);
+    const std::shared_ptr<IWindowController>& window_controller = nullptr,
+    const std::shared_ptr<IHttpTransport>& http_transport = nullptr);
 
 #endif

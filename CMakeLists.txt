@@ -53,6 +53,8 @@ add_library(bolt_core STATIC
         src/agent/tool_set_factory.cpp
         src/agent/tool_registry.cpp
         src/agent/wait_for_window_tool.cpp
+        src/agent/web_fetch_tool.cpp
+        src/agent/web_search_tool.cpp
         src/agent/workspace_prompt.cpp
         src/agent/workspace_utils.cpp
         src/agent/write_file_tool.cpp

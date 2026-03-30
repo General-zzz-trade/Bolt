@@ -7,6 +7,7 @@
 #include "../core/interfaces/approval_provider.h"
 #include "../core/interfaces/command_runner.h"
 #include "../core/interfaces/file_system.h"
+#include "../core/interfaces/http_transport.h"
 #include "../core/interfaces/model_client.h"
 #include "../core/interfaces/process_manager.h"
 #include "../core/interfaces/ui_automation.h"
@@ -21,6 +22,7 @@ struct AgentServices {
     std::shared_ptr<IWindowController> window_controller;
     std::shared_ptr<IApprovalProvider> approval_provider;
     std::shared_ptr<IAuditLogger> audit_logger;
+    std::shared_ptr<IHttpTransport> http_transport;
 };
 
 #endif
