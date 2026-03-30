@@ -124,11 +124,37 @@ std::string OpenAiClient::build_request_body(const std::vector<ChatMessage>& mes
 HttpRequest OpenAiClient::make_request(const std::string& body) const {
     HttpRequest request;
     request.method = "POST";
-    request.url = config_.base_url + "/v1/chat/completions";
+
+    // Build URL: if base_url already ends with a versioned path (e.g. /v1, /v4),
+    // append /chat/completions directly; otherwise prepend /v1.
+    std::string base = config_.base_url;
+    // Strip trailing slash
+    while (!base.empty() && base.back() == '/') base.pop_back();
+
+    // Check if base already ends with /v1, /v2, /v3, /v4, etc.
+    bool has_version = false;
+    if (base.size() >= 3) {
+        auto last_slash = base.rfind('/');
+        if (last_slash != std::string::npos) {
+            std::string last_segment = base.substr(last_slash);
+            if (last_segment.size() >= 3 && last_segment[0] == '/' && last_segment[1] == 'v' &&
+                std::isdigit(static_cast<unsigned char>(last_segment[2]))) {
+                has_version = true;
+            }
+        }
+    }
+
+    if (has_version) {
+        request.url = base + "/chat/completions";
+    } else {
+        request.url = base + "/v1/chat/completions";
+    }
+
     request.body = body;
     request.timeout_ms = config_.timeout_ms;
     request.headers = {
-        {"Authorization", "Bearer " + config_.api_key}
+        {"Authorization", "Bearer " + config_.api_key},
+        {"Content-Type", "application/json"}
     };
     return request;
 }
