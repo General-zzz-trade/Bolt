@@ -281,6 +281,9 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
 
         // === Slash Commands ===
 
+        // Clear trace observer before commands to prevent dangling references
+        agent.set_trace_observer(nullptr);
+
         if (line == "/quit" || line == "/exit" || line == "/q") {
             output << "\033[2mGoodbye!\033[0m\n";
             auto_save();
@@ -967,7 +970,11 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
                         output << buf;
                     }
                     int status = pclose(pipe);
+#ifdef _WIN32
+                    int code = status;
+#else
                     int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
                     if (code != 0) {
                         output << "\033[31mexit code: " << code << "\033[0m\n";
                     }
