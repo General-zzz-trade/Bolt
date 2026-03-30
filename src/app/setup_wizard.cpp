@@ -160,11 +160,17 @@ std::string http_get_localhost(int port, const std::string& path, int timeout_ms
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
     // Set timeout for connect
+#ifdef _WIN32
+    DWORD tv = static_cast<DWORD>(timeout_ms);
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
+#else
     struct timeval tv{};
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
 
     if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
 #ifdef _WIN32
@@ -188,7 +194,7 @@ std::string http_get_localhost(int port, const std::string& path, int timeout_ms
     std::string response;
     char buf[4096];
     while (true) {
-        ssize_t n = ::recv(sock, buf, sizeof(buf) - 1, 0);
+        auto n = ::recv(sock, buf, sizeof(buf) - 1, 0);
         if (n <= 0) break;
         buf[n] = '\0';
         response += buf;
