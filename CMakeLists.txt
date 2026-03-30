@@ -162,4 +162,8 @@ add_test(NAME mcp_server_tests COMMAND mcp_server_tests)
 
 add_executable(approval_provider_tests tests/approval_provider_tests.cpp)
 target_link_libraries(approval_provider_tests PRIVATE bolt_core)
+
+# API E2E tests (requires real API key, not run in CI)
+add_executable(api_e2e_tests tests/api_e2e_tests.cpp)
+target_link_libraries(api_e2e_tests PRIVATE bolt_core)
 add_test(NAME approval_provider_tests COMMAND approval_provider_tests)
