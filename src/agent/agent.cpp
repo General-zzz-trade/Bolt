@@ -363,8 +363,38 @@ void Agent::push_history(Message message) {
 }
 
 void Agent::enforce_history_budget() {
+    // Helper: check if removing the front message would break a tool call chain
+    // (assistant with tool_calls must be followed by tool results)
+    auto safe_to_remove_front = [this]() -> bool {
+        if (history_.empty()) return false;
+        const auto& front = history_.front();
+        // If front is an assistant with tool_calls, we must also remove
+        // all subsequent tool results that belong to it
+        if (front.role == "assistant" && !front.tool_calls.empty()) {
+            // Count how many tool results follow
+            std::size_t tool_count = 0;
+            for (std::size_t i = 1; i < history_.size(); ++i) {
+                if (history_[i].role == "tool") ++tool_count;
+                else break;
+            }
+            // Remove assistant + all its tool results together
+            for (std::size_t i = 0; i <= tool_count && !history_.empty(); ++i) {
+                history_.erase(history_.begin());
+            }
+            return true;
+        }
+        // Don't remove a tool result orphan (its assistant was already removed)
+        // Just remove it
+        return true;
+    };
+
     while (history_.size() > runtime_config_.history_window) {
-        history_.erase(history_.begin());
+        if (!safe_to_remove_front()) break;
+        if (history_.empty()) break;
+        if (history_.front().role != "assistant" || history_.front().tool_calls.empty()) {
+            history_.erase(history_.begin());
+        }
+        // If safe_to_remove_front already erased, the loop continues
     }
 
     std::size_t total_bytes = 0;
@@ -667,21 +697,53 @@ std::vector<ChatMessage> Agent::build_chat_messages() const {
             tool_msg.role = ChatRole::tool;
             tool_msg.content = msg.content;
             tool_msg.name = msg.name;
-            // Find the tool_call_id from the previous assistant message
-            if (!messages.empty()) {
-                const auto& prev = messages.back();
-                if (prev.role == ChatRole::assistant) {
-                    for (const auto& tc : prev.tool_calls) {
+            // Search backwards for the assistant message that contains the matching tool_call
+            for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+                if (it->role == ChatRole::assistant && !it->tool_calls.empty()) {
+                    for (const auto& tc : it->tool_calls) {
                         if (tc.name == msg.name) {
                             tool_msg.tool_call_id = tc.id;
                             break;
                         }
                     }
+                    if (!tool_msg.tool_call_id.empty()) break;
                 }
+                // Stop searching once we hit a user message (don't cross conversation turns)
+                if (it->role == ChatRole::user) break;
             }
             messages.push_back(std::move(tool_msg));
         } else if (msg.role == "system") {
-            messages.push_back({ChatRole::user, "[system] " + msg.content});
+            // Don't insert system messages between assistant tool_calls and tool results
+            // as this breaks the tool call chain that APIs expect
+            bool in_tool_chain = false;
+            if (!messages.empty() && messages.back().role == ChatRole::tool) {
+                in_tool_chain = true;
+            } else if (!messages.empty() && messages.back().role == ChatRole::assistant &&
+                       messages.back().has_tool_calls()) {
+                in_tool_chain = true;
+            }
+            if (!in_tool_chain) {
+                messages.push_back({ChatRole::user, "[system] " + msg.content});
+            }
+            // If in tool chain, skip this system message to preserve API format
+        }
+    }
+
+    // Sanitize: remove orphaned assistant+tool_calls without matching tool results
+    // This prevents API errors like "assistant message with tool_calls must be followed by tool messages"
+    for (auto it = raw_messages.begin(); it != raw_messages.end(); ) {
+        if (it->role == ChatRole::assistant && it->has_tool_calls()) {
+            // Check if next message is a tool result
+            auto next = it + 1;
+            if (next == raw_messages.end() || next->role != ChatRole::tool) {
+                // Orphaned: remove the assistant message and strip tool_calls
+                it->tool_calls.clear();
+                ++it;
+            } else {
+                ++it;
+            }
+        } else {
+            ++it;
         }
     }
 

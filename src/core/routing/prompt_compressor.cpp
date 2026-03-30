@@ -196,10 +196,18 @@ std::vector<ChatMessage> PromptCompressor::trim_history(
         }
     }
 
-    // Keep last N non-system messages
+    // Keep last N non-system messages, but respect tool chain boundaries
     const std::size_t keep = config_.max_history_messages - result.size();
     if (messages.size() > keep) {
-        const std::size_t start = messages.size() - keep;
+        std::size_t start = messages.size() - keep;
+
+        // Adjust start forward if it lands on a tool message (orphaned from its assistant)
+        // or backward to include the assistant that owns tool results at the start
+        while (start > 0 && start < messages.size() &&
+               messages[start].role == ChatRole::tool) {
+            --start;  // Include the assistant message that has the tool_calls
+        }
+
         for (std::size_t i = start; i < messages.size(); ++i) {
             if (messages[i].role != ChatRole::system) {
                 result.push_back(messages[i]);
