@@ -11,6 +11,8 @@ struct AgentRuntimeConfig {
     int max_consecutive_failures = 3;      // inject recovery guidance after N failures
     bool auto_verify = true;               // auto-run build_and_test after code edits
     int max_auto_verify_retries = 3;       // max auto-verify attempts per turn
+    bool compact_prompt = false;           // use shorter system prompt for small models
+    bool core_tools_only = false;          // only register essential tools for small models
 };
 
 #endif

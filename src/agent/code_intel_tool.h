@@ -1,9 +1,12 @@
 #ifndef AGENT_CODE_INTEL_TOOL_H
 #define AGENT_CODE_INTEL_TOOL_H
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "../core/interfaces/file_system.h"
 #include "tool.h"
@@ -52,8 +55,25 @@ private:
     std::vector<Match> search_pattern(const std::string& pattern, int max_results = 30) const;
     std::vector<Match> search_in_file(const std::filesystem::path& file,
                                        const std::string& pattern) const;
+
+    // Cached file list to avoid repeated filesystem walks
+    const std::vector<std::filesystem::path>& get_source_files() const;
     void collect_source_files(const std::filesystem::path& dir,
                               std::vector<std::filesystem::path>& out) const;
+
+    // File list cache (refreshed every 10 seconds)
+    mutable std::vector<std::filesystem::path> cached_files_;
+    mutable std::chrono::steady_clock::time_point files_cache_time_;
+    static constexpr int FILES_CACHE_TTL_SECONDS = 10;
+
+    // Result cache for recent queries (TTL 30 seconds)
+    struct CacheEntry {
+        ToolResult result;
+        std::chrono::steady_clock::time_point timestamp;
+    };
+    mutable std::unordered_map<std::string, CacheEntry> result_cache_;
+    static constexpr int RESULT_CACHE_TTL_SECONDS = 30;
+    static constexpr size_t RESULT_CACHE_MAX_SIZE = 64;
 };
 
 #endif

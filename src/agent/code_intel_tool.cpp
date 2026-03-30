@@ -61,24 +61,49 @@ ToolResult CodeIntelTool::run(const std::string& args) const {
         input = trim_copy(input.substr(8));
     }
 
-    if (input.rfind("find_def:", 0) == 0) {
-        return find_definition(trim_copy(input.substr(9)));
-    }
-    if (input.rfind("find_class:", 0) == 0) {
-        return find_class(trim_copy(input.substr(11)));
-    }
-    if (input.rfind("find_refs:", 0) == 0) {
-        return find_references(trim_copy(input.substr(10)));
-    }
-    if (input.rfind("find_includes:", 0) == 0) {
-        return find_includes(trim_copy(input.substr(14)));
-    }
-    if (input.rfind("list_functions:", 0) == 0) {
-        return list_functions(trim_copy(input.substr(15)));
+    // Check result cache first
+    auto now = std::chrono::steady_clock::now();
+    auto cache_it = result_cache_.find(input);
+    if (cache_it != result_cache_.end()) {
+        auto age = std::chrono::duration_cast<std::chrono::seconds>(
+            now - cache_it->second.timestamp).count();
+        if (age < RESULT_CACHE_TTL_SECONDS) {
+            return cache_it->second.result;
+        }
+        result_cache_.erase(cache_it);
     }
 
-    return {false, "Unknown command. Use: find_def:<symbol>, find_class:<name>, "
-                    "find_refs:<symbol>, find_includes:<file>, list_functions:<path>"};
+    ToolResult result = {false, "Unknown command. Use: find_def:<symbol>, find_class:<name>, "
+                                "find_refs:<symbol>, find_includes:<file>, list_functions:<path>"};
+
+    if (input.rfind("find_def:", 0) == 0) {
+        result = find_definition(trim_copy(input.substr(9)));
+    } else if (input.rfind("find_class:", 0) == 0) {
+        result = find_class(trim_copy(input.substr(11)));
+    } else if (input.rfind("find_refs:", 0) == 0) {
+        result = find_references(trim_copy(input.substr(10)));
+    } else if (input.rfind("find_includes:", 0) == 0) {
+        result = find_includes(trim_copy(input.substr(14)));
+    } else if (input.rfind("list_functions:", 0) == 0) {
+        result = list_functions(trim_copy(input.substr(15)));
+    } else {
+        return result;  // Don't cache errors
+    }
+
+    // Store in result cache (evict if too large)
+    if (result_cache_.size() >= RESULT_CACHE_MAX_SIZE) {
+        // Evict oldest entry
+        auto oldest = result_cache_.begin();
+        for (auto it = result_cache_.begin(); it != result_cache_.end(); ++it) {
+            if (it->second.timestamp < oldest->second.timestamp) {
+                oldest = it;
+            }
+        }
+        result_cache_.erase(oldest);
+    }
+    result_cache_[input] = {result, now};
+
+    return result;
 }
 
 ToolResult CodeIntelTool::find_definition(const std::string& symbol) const {
@@ -210,27 +235,75 @@ ToolResult CodeIntelTool::list_functions(const std::string& file_path) const {
 void CodeIntelTool::collect_source_files(const std::filesystem::path& dir,
                                           std::vector<std::filesystem::path>& out) const {
     std::error_code ec;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file()) continue;
-        const std::string path_str = entry.path().string();
-        if (path_str.find(".git") != std::string::npos) continue;
-        if (path_str.find("build") != std::string::npos &&
-            path_str.find("CMakeFiles") != std::string::npos) continue;
-        if (path_str.find("third_party") != std::string::npos) continue;
-        if (is_source_file(entry.path())) {
+    auto options = std::filesystem::directory_options::skip_permission_denied;
+    for (auto it = std::filesystem::recursive_directory_iterator(dir, options, ec);
+         it != std::filesystem::recursive_directory_iterator(); ) {
+        const auto& entry = *it;
+
+        // Skip excluded directories entirely (don't descend)
+        if (entry.is_directory()) {
+            const auto dirname = entry.path().filename().string();
+            if (dirname == ".git" || dirname == "build" || dirname == "third_party" ||
+                dirname == "node_modules" || dirname == ".cache" || dirname == "__pycache__" ||
+                dirname == "target" || dirname == "vendor" || dirname == "dist" ||
+                dirname == ".next" || dirname == "CMakeFiles") {
+                it.disable_recursion_pending();
+                std::error_code skip_ec;
+                it.increment(skip_ec);
+                continue;
+            }
+        }
+
+        if (entry.is_regular_file(ec) && is_source_file(entry.path())) {
             out.push_back(entry.path());
         }
+
+        std::error_code inc_ec;
+        it.increment(inc_ec);
     }
+}
+
+const std::vector<std::filesystem::path>& CodeIntelTool::get_source_files() const {
+    auto now = std::chrono::steady_clock::now();
+    auto age = std::chrono::duration_cast<std::chrono::seconds>(
+        now - files_cache_time_).count();
+    if (cached_files_.empty() || age >= FILES_CACHE_TTL_SECONDS) {
+        cached_files_.clear();
+        collect_source_files(workspace_root_, cached_files_);
+        files_cache_time_ = now;
+    }
+    return cached_files_;
 }
 
 std::vector<CodeIntelTool::Match> CodeIntelTool::search_pattern(
     const std::string& pattern, int max_results) const {
 
-    std::vector<std::filesystem::path> files;
-    collect_source_files(workspace_root_, files);
+    const auto& files = get_source_files();
 
     std::vector<Match> results;
     std::regex re(pattern, std::regex::optimize | std::regex::ECMAScript);
+
+    // Extract a plain-text substring from the pattern for fast pre-filtering.
+    // Find the longest literal run (no regex metacharacters) to use as a
+    // quick rejection test before invoking the expensive std::regex engine.
+    std::string literal_hint;
+    {
+        std::string current;
+        for (char c : pattern) {
+            if (std::string("\\[](){}.*+?|^$").find(c) != std::string::npos) {
+                if (current.size() > literal_hint.size()) {
+                    literal_hint = current;
+                }
+                current.clear();
+            } else {
+                current += c;
+            }
+        }
+        if (current.size() > literal_hint.size()) {
+            literal_hint = current;
+        }
+    }
+    const bool use_hint = literal_hint.size() >= 3;
 
     for (const auto& file : files) {
         if (static_cast<int>(results.size()) >= max_results) break;
@@ -242,6 +315,10 @@ std::vector<CodeIntelTool::Match> CodeIntelTool::search_pattern(
         int line_num = 0;
         while (std::getline(input, line) && static_cast<int>(results.size()) < max_results) {
             ++line_num;
+            // Fast pre-filter: skip lines that don't contain the literal hint
+            if (use_hint && line.find(literal_hint) == std::string::npos) {
+                continue;
+            }
             try {
                 if (std::regex_search(line, re)) {
                     std::string trimmed = trim_copy(line);

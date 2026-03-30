@@ -282,6 +282,14 @@ void apply_config_entry(AppConfig* config, const std::string& key, const std::st
         config->agent_runtime.max_auto_verify_retries = parse_int(key, value);
         return;
     }
+    if (key == "agent.compact_prompt") {
+        config->agent_runtime.compact_prompt = parse_bool(key, value);
+        return;
+    }
+    if (key == "agent.core_tools_only") {
+        config->agent_runtime.core_tools_only = parse_bool(key, value);
+        return;
+    }
     if (key == "approval.mode") {
         config->approval.mode = parse_approval_mode(key, value);
         return;
@@ -420,6 +428,8 @@ void load_environment_overrides(AppConfig* config) {
     apply_env_override(config, "BOLT_AGENT_AUTO_VERIFY", "agent.auto_verify");
     apply_env_override(config, "BOLT_AGENT_MAX_AUTO_VERIFY_RETRIES",
                        "agent.max_auto_verify_retries");
+    apply_env_override(config, "BOLT_AGENT_COMPACT_PROMPT", "agent.compact_prompt");
+    apply_env_override(config, "BOLT_AGENT_CORE_TOOLS_ONLY", "agent.core_tools_only");
     apply_env_override(config, "BOLT_APPROVAL_MODE", "approval.mode");
     apply_env_override(config, "BOLT_SANDBOX_ENABLED", "sandbox.enabled");
     apply_env_override(config, "BOLT_SANDBOX_NETWORK", "sandbox.network_enabled");

@@ -4,6 +4,7 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -74,6 +75,19 @@ std::string audit_target_for_action(const Action& action) {
         return "chars=" + std::to_string(action.args.size());
     }
     return shorten_value(trim_copy(action.args), 160);
+}
+
+bool detect_small_model(const std::string& model_name) {
+    // Auto-detect small/budget models that benefit from compact prompts
+    static const std::vector<std::string> small_model_hints = {
+        "8k", "lite", "mini", "flash", "turbo", "instant", "tiny", "small", "nano"
+    };
+    for (const auto& hint : small_model_hints) {
+        if (model_name.find(hint) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace
@@ -388,80 +402,100 @@ void Agent::log_tool_audit(const std::string& stage,
 }
 
 std::string Agent::build_prompt() const {
+    const bool use_compact = runtime_config_.compact_prompt ||
+        detect_small_model(client_->model());
+
     std::ostringstream prompt;
-    prompt << "You are a local C++ coding agent running inside a workspace.\n";
-    prompt << "Workspace root: " << workspace_root_.string() << "\n\n";
-    prompt << "Available tools:\n";
-    for (const Tool* tool : tools_.list()) {
-        prompt << "- " << tool->name() << ": " << tool->description() << "\n";
-    }
 
-    prompt << "\nDecision rules:\n";
-    prompt << "- If the latest user request asks for arithmetic or an exact calculation, call calculator before replying.\n";
-    prompt << "- If the latest user request asks which files or directories exist, call list_dir.\n";
-    prompt << "- If the latest user request asks where code or text appears, call search_code.\n";
-    prompt << "- If the latest user request asks about file contents, call read_file after you know the path.\n";
-    prompt << "- Use edit_file for targeted changes to an existing workspace file when you know one or more exact text blocks to replace, or one or more line ranges to rewrite.\n";
-    prompt << "- edit_file requires user approval before execution.\n";
-    prompt << "- Use write_file only when the user explicitly asks to create or replace a file inside the workspace.\n";
-    prompt << "- write_file requires user approval before execution.\n";
-    prompt << "- When the user specifies exact file content, preserve that text exactly. Do not shorten, paraphrase, or clean it up.\n";
-    prompt << "- Use run_command only for safe developer commands such as git status, git diff, g++ --version, ctest, cmake --build, or ollama list.\n";
-    prompt << "- run_command requires user approval before execution.\n";
-    if (tools_.find("list_processes") != nullptr) {
-        prompt << "- If the user asks which local applications are running, call list_processes.\n";
-    }
-    if (tools_.find("list_windows") != nullptr) {
-        prompt << "- If the user asks which visible windows exist, call list_windows.\n";
-    }
-    if (tools_.find("open_app") != nullptr) {
-        prompt << "- Use open_app only when the user explicitly asks to launch a local application.\n";
-        prompt << "- open_app requires user approval before execution.\n";
-    }
-    if (tools_.find("focus_window") != nullptr) {
-        prompt << "- Use focus_window only when the user explicitly asks to bring a visible window to the foreground.\n";
-        prompt << "- focus_window requires user approval before execution.\n";
-    }
-    if (tools_.find("wait_for_window") != nullptr) {
-        prompt << "- If the user asks you to wait for an application window to appear, call wait_for_window.\n";
-    }
-    if (tools_.find("inspect_ui") != nullptr) {
-        prompt << "- If the user asks what controls or visible elements exist in the current window, call inspect_ui.\n";
-    }
-    if (tools_.find("click_element") != nullptr) {
-        prompt << "- Use click_element only when the user explicitly asks you to click or focus a UI element.\n";
-        prompt << "- click_element requires user approval before execution.\n";
-    }
-    if (tools_.find("type_text") != nullptr) {
-        prompt << "- Use type_text only after the intended window is focused.\n";
-        prompt << "- type_text requires user approval before execution.\n";
-    }
-    if (tools_.find("open_app") != nullptr && tools_.find("wait_for_window") != nullptr &&
-        tools_.find("type_text") != nullptr) {
-        prompt << "- For desktop tasks such as opening Notepad and entering text, prefer a multi-step sequence: open_app, wait_for_window, focus_window, type_text, then reply.\n";
-    }
-    if (tools_.find("inspect_ui") != nullptr && tools_.find("click_element") != nullptr) {
-        prompt << "- For desktop UI tasks such as clicking a button or selecting an input, first inspect_ui, then click_element, then type_text if needed.\n";
-    }
-    prompt << "- If a tool already gives the needed facts, reply directly.\n";
-    prompt << "- Never invent file contents.\n";
-    prompt << "- Return JSON only.\n";
+    if (use_compact) {
+        // Compact prompt for small models (~200 tokens instead of ~800)
+        prompt << "You are a coding agent. Workspace: " << workspace_root_.string() << "\n";
+        prompt << "Read code before editing. Verify with build_and_test after changes. Be concise.\n\n";
+        prompt << "Tools: ";
+        bool first = true;
+        for (const Tool* tool : tools_.list()) {
+            if (!first) prompt << ", ";
+            prompt << tool->name();
+            first = false;
+        }
+        prompt << "\n";
+        prompt << "edit_file: path=<file> old<<<text>>> new<<<text>>>\n";
+        prompt << "write_file: path=<file> content<<<text>>>\n";
+    } else {
+        prompt << "You are a local C++ coding agent running inside a workspace.\n";
+        prompt << "Workspace root: " << workspace_root_.string() << "\n\n";
+        prompt << "Available tools:\n";
+        for (const Tool* tool : tools_.list()) {
+            prompt << "- " << tool->name() << ": " << tool->description() << "\n";
+        }
 
-    prompt << "\nReturn exactly one JSON object and nothing else.\n";
-    prompt << "Reply example:\n";
-    prompt << "{\"action\":\"reply\",\"content\":\"The answer goes here.\",\"reason\":\"No tool is needed.\",\"risk\":\"low\",\"requires_confirmation\":\"false\"}\n";
-    prompt << "Tool example:\n";
-    prompt << "{\"action\":\"tool\",\"tool\":\"read_file\",\"args\":\"src/main.cpp\",\"reason\":\"Need to inspect the file before answering.\",\"risk\":\"low\",\"requires_confirmation\":\"false\"}\n";
-    prompt << "Approval-required tool example:\n";
-    prompt << "{\"action\":\"tool\",\"tool\":\"run_command\",\"args\":\"ollama list\",\"reason\":\"Need local model state before answering.\",\"risk\":\"medium\",\"requires_confirmation\":\"true\"}\n";
-    prompt << "The args field must always be a JSON string.\n";
-    prompt << "For edit_file, args must be either: path=<relative path> then one or more old<<< exact old text >>> new<<< replacement text >>> pairs; or path=<relative path> then one or more replace_lines=start-end content<<< replacement text >>> blocks. Do not mix the two modes.\n";
-    prompt << "For write_file, args must be: path=<relative path> then a newline, then content<<<, then file content, then >>> on its own line.\n";
-    prompt << "For run_command, args must be the exact command line string.\n";
-    prompt << "For wait_for_window, args should be either a window title substring, or lines such as title=<text> and optional timeout_ms=<milliseconds>.\n";
-    prompt << "For inspect_ui, args may be empty, or may include window_handle=<handle> and optional max_elements=<count>.\n";
-    prompt << "For click_element, args should be handle=<element handle> or one or more selector lines such as text=<visible text> and class=<class name>.\n";
-    prompt << "For type_text, args must be: text<<<, then the exact text to type, then >>> on its own line.\n";
+        prompt << "\nDecision rules:\n";
+        prompt << "- If the latest user request asks for arithmetic or an exact calculation, call calculator before replying.\n";
+        prompt << "- If the latest user request asks which files or directories exist, call list_dir.\n";
+        prompt << "- If the latest user request asks where code or text appears, call search_code.\n";
+        prompt << "- If the latest user request asks about file contents, call read_file after you know the path.\n";
+        prompt << "- Use edit_file for targeted changes to an existing workspace file when you know one or more exact text blocks to replace, or one or more line ranges to rewrite.\n";
+        prompt << "- edit_file requires user approval before execution.\n";
+        prompt << "- Use write_file only when the user explicitly asks to create or replace a file inside the workspace.\n";
+        prompt << "- write_file requires user approval before execution.\n";
+        prompt << "- When the user specifies exact file content, preserve that text exactly. Do not shorten, paraphrase, or clean it up.\n";
+        prompt << "- Use run_command only for safe developer commands such as git status, git diff, g++ --version, ctest, cmake --build, or ollama list.\n";
+        prompt << "- run_command requires user approval before execution.\n";
+        if (tools_.find("list_processes") != nullptr) {
+            prompt << "- If the user asks which local applications are running, call list_processes.\n";
+        }
+        if (tools_.find("list_windows") != nullptr) {
+            prompt << "- If the user asks which visible windows exist, call list_windows.\n";
+        }
+        if (tools_.find("open_app") != nullptr) {
+            prompt << "- Use open_app only when the user explicitly asks to launch a local application.\n";
+            prompt << "- open_app requires user approval before execution.\n";
+        }
+        if (tools_.find("focus_window") != nullptr) {
+            prompt << "- Use focus_window only when the user explicitly asks to bring a visible window to the foreground.\n";
+            prompt << "- focus_window requires user approval before execution.\n";
+        }
+        if (tools_.find("wait_for_window") != nullptr) {
+            prompt << "- If the user asks you to wait for an application window to appear, call wait_for_window.\n";
+        }
+        if (tools_.find("inspect_ui") != nullptr) {
+            prompt << "- If the user asks what controls or visible elements exist in the current window, call inspect_ui.\n";
+        }
+        if (tools_.find("click_element") != nullptr) {
+            prompt << "- Use click_element only when the user explicitly asks you to click or focus a UI element.\n";
+            prompt << "- click_element requires user approval before execution.\n";
+        }
+        if (tools_.find("type_text") != nullptr) {
+            prompt << "- Use type_text only after the intended window is focused.\n";
+            prompt << "- type_text requires user approval before execution.\n";
+        }
+        if (tools_.find("open_app") != nullptr && tools_.find("wait_for_window") != nullptr &&
+            tools_.find("type_text") != nullptr) {
+            prompt << "- For desktop tasks such as opening Notepad and entering text, prefer a multi-step sequence: open_app, wait_for_window, focus_window, type_text, then reply.\n";
+        }
+        if (tools_.find("inspect_ui") != nullptr && tools_.find("click_element") != nullptr) {
+            prompt << "- For desktop UI tasks such as clicking a button or selecting an input, first inspect_ui, then click_element, then type_text if needed.\n";
+        }
+        prompt << "- If a tool already gives the needed facts, reply directly.\n";
+        prompt << "- Never invent file contents.\n";
+        prompt << "- Return JSON only.\n";
+
+        prompt << "\nReturn exactly one JSON object and nothing else.\n";
+        prompt << "Reply example:\n";
+        prompt << "{\"action\":\"reply\",\"content\":\"The answer goes here.\",\"reason\":\"No tool is needed.\",\"risk\":\"low\",\"requires_confirmation\":\"false\"}\n";
+        prompt << "Tool example:\n";
+        prompt << "{\"action\":\"tool\",\"tool\":\"read_file\",\"args\":\"src/main.cpp\",\"reason\":\"Need to inspect the file before answering.\",\"risk\":\"low\",\"requires_confirmation\":\"false\"}\n";
+        prompt << "Approval-required tool example:\n";
+        prompt << "{\"action\":\"tool\",\"tool\":\"run_command\",\"args\":\"ollama list\",\"reason\":\"Need local model state before answering.\",\"risk\":\"medium\",\"requires_confirmation\":\"true\"}\n";
+        prompt << "The args field must always be a JSON string.\n";
+        prompt << "For edit_file, args must be either: path=<relative path> then one or more old<<< exact old text >>> new<<< replacement text >>> pairs; or path=<relative path> then one or more replace_lines=start-end content<<< replacement text >>> blocks. Do not mix the two modes.\n";
+        prompt << "For write_file, args must be: path=<relative path> then a newline, then content<<<, then file content, then >>> on its own line.\n";
+        prompt << "For run_command, args must be the exact command line string.\n";
+        prompt << "For wait_for_window, args should be either a window title substring, or lines such as title=<text> and optional timeout_ms=<milliseconds>.\n";
+        prompt << "For inspect_ui, args may be empty, or may include window_handle=<handle> and optional max_elements=<count>.\n";
+        prompt << "For click_element, args should be handle=<element handle> or one or more selector lines such as text=<visible text> and class=<class name>.\n";
+        prompt << "For type_text, args must be: text<<<, then the exact text to type, then >>> on its own line.\n";
+    }
 
     prompt << "\nConversation so far:\n";
     const std::size_t start = history_.size() > runtime_config_.history_window
@@ -500,68 +534,83 @@ std::vector<ChatMessage> Agent::build_chat_messages() const {
     auto& messages = raw_messages;
 
     // System message — production-grade agent instructions
+    const bool use_compact = runtime_config_.compact_prompt ||
+        detect_small_model(client_->model());
+
     std::ostringstream system_prompt;
 
-    // Identity and context
-    system_prompt << "You are an autonomous software engineering agent. ";
-    system_prompt << "You work inside a project workspace and use tools to read, write, search, build, and test code.\n";
-    system_prompt << "Workspace: " << workspace_root_.string() << "\n\n";
+    if (use_compact) {
+        // Compact system prompt for small models (~200 tokens vs ~800)
+        system_prompt << "You are a coding agent. Workspace: " << workspace_root_.string() << "\n";
+        system_prompt << "Read code before editing. Verify with build_and_test after changes.\n";
+        system_prompt << "Be concise. Use tools when needed.\n";
+        system_prompt << "edit_file: path=<file> old<<<text>>> new<<<text>>>\n";
+        system_prompt << "write_file: path=<file> content<<<text>>>\n";
+        if (runtime_config_.auto_verify) {
+            system_prompt << "Auto-verify is on: build_and_test runs after edits. Fix failures immediately.\n";
+        }
+    } else {
+        // Identity and context
+        system_prompt << "You are an autonomous software engineering agent. ";
+        system_prompt << "You work inside a project workspace and use tools to read, write, search, build, and test code.\n";
+        system_prompt << "Workspace: " << workspace_root_.string() << "\n\n";
 
-    // Core principles
-    system_prompt << "# Core Principles\n";
-    system_prompt << "1. ALWAYS read code before modifying it. Never guess file contents.\n";
-    system_prompt << "2. ALWAYS verify changes by running build_and_test after editing code.\n";
-    system_prompt << "3. If a build or test fails, read the error, fix the code, and re-run build_and_test. Repeat until passing.\n";
-    system_prompt << "4. For complex tasks (3+ steps), use task_planner to create a plan first.\n";
-    system_prompt << "5. Make small, incremental changes. Edit one thing, verify, then move on.\n";
-    system_prompt << "6. Use git to commit working changes as checkpoints.\n\n";
+        // Core principles
+        system_prompt << "# Core Principles\n";
+        system_prompt << "1. ALWAYS read code before modifying it. Never guess file contents.\n";
+        system_prompt << "2. ALWAYS verify changes by running build_and_test after editing code.\n";
+        system_prompt << "3. If a build or test fails, read the error, fix the code, and re-run build_and_test. Repeat until passing.\n";
+        system_prompt << "4. For complex tasks (3+ steps), use task_planner to create a plan first.\n";
+        system_prompt << "5. Make small, incremental changes. Edit one thing, verify, then move on.\n";
+        system_prompt << "6. Use git to commit working changes as checkpoints.\n\n";
 
-    // Standard workflow
-    system_prompt << "# Standard Workflow\n";
-    system_prompt << "For any coding task, follow this sequence:\n";
-    system_prompt << "  1. Understand: read_file and search_code to understand existing code\n";
-    system_prompt << "  2. Plan: task_planner to decompose if complex\n";
-    system_prompt << "  3. Edit: edit_file (preferred) or write_file to make changes\n";
-    system_prompt << "  4. Verify: build_and_test to compile and run tests\n";
-    system_prompt << "  5. Fix: if verification fails, read errors, fix code, go to step 4\n";
-    system_prompt << "  6. Commit: run_command with git add + git commit when tests pass\n";
-    system_prompt << "  7. Next: mark step done in task_planner, proceed to next step\n\n";
+        // Standard workflow
+        system_prompt << "# Standard Workflow\n";
+        system_prompt << "For any coding task, follow this sequence:\n";
+        system_prompt << "  1. Understand: read_file and search_code to understand existing code\n";
+        system_prompt << "  2. Plan: task_planner to decompose if complex\n";
+        system_prompt << "  3. Edit: edit_file (preferred) or write_file to make changes\n";
+        system_prompt << "  4. Verify: build_and_test to compile and run tests\n";
+        system_prompt << "  5. Fix: if verification fails, read errors, fix code, go to step 4\n";
+        system_prompt << "  6. Commit: run_command with git add + git commit when tests pass\n";
+        system_prompt << "  7. Next: mark step done in task_planner, proceed to next step\n\n";
 
-    // Tool usage guidelines
-    system_prompt << "# Tool Guidelines\n";
-    system_prompt << "- read_file: Read a file by relative path (e.g., src/main.cpp). Always read before editing.\n";
-    system_prompt << "- list_dir: List directory contents. Use to discover project structure.\n";
-    system_prompt << "- search_code: Find text in files across the workspace.\n";
-    system_prompt << "- edit_file: Modify existing files using exact text replacement.\n";
-    system_prompt << "  Format: path=<file> then old<<<exact old text>>> new<<<replacement>>>\n";
-    system_prompt << "- write_file: Create new files.\n";
-    system_prompt << "  Format: path=<file> then content<<<file content>>>\n";
-    system_prompt << "- build_and_test: Compile the project and run tests. Use after every code change.\n";
-    system_prompt << "- run_command: Execute shell commands (git, build tools, etc.).\n";
-    system_prompt << "- task_planner: Create and track multi-step plans.\n";
-    system_prompt << "  Commands: plan:<steps>, done:<step_number>, status\n";
-    system_prompt << "- calculator: Evaluate arithmetic expressions.\n\n";
+        // Tool usage guidelines
+        system_prompt << "# Tool Guidelines\n";
+        system_prompt << "- read_file: Read a file by relative path (e.g., src/main.cpp). Always read before editing.\n";
+        system_prompt << "- list_dir: List directory contents. Use to discover project structure.\n";
+        system_prompt << "- search_code: Find text in files across the workspace.\n";
+        system_prompt << "- edit_file: Modify existing files using exact text replacement.\n";
+        system_prompt << "  Format: path=<file> then old<<<exact old text>>> new<<<replacement>>>\n";
+        system_prompt << "- write_file: Create new files.\n";
+        system_prompt << "  Format: path=<file> then content<<<file content>>>\n";
+        system_prompt << "- build_and_test: Compile the project and run tests. Use after every code change.\n";
+        system_prompt << "- run_command: Execute shell commands (git, build tools, etc.).\n";
+        system_prompt << "- task_planner: Create and track multi-step plans.\n";
+        system_prompt << "  Commands: plan:<steps>, done:<step_number>, status\n";
+        system_prompt << "- calculator: Evaluate arithmetic expressions.\n\n";
 
-    // Auto-verify
-    if (runtime_config_.auto_verify) {
-        system_prompt << "# Auto-Verify\n";
-        system_prompt << "After you edit code, the system automatically runs build_and_test. ";
-        system_prompt << "If it fails, you will see the error output and should fix it immediately.\n\n";
+        // Auto-verify
+        if (runtime_config_.auto_verify) {
+            system_prompt << "# Auto-Verify\n";
+            system_prompt << "After you edit code, the system automatically runs build_and_test. ";
+            system_prompt << "If it fails, you will see the error output and should fix it immediately.\n\n";
+        }
+
+        // Error handling
+        system_prompt << "# Error Handling\n";
+        system_prompt << "- If a tool returns an error, analyze the error message carefully.\n";
+        system_prompt << "- For compilation errors: read the file at the error line, understand the issue, fix it.\n";
+        system_prompt << "- For test failures: read the failing test to understand what it expects.\n";
+        system_prompt << "- Never skip verification. Never assume code works without testing.\n";
+        system_prompt << "- If stuck after 3 attempts, explain the issue and ask the user for guidance.\n\n";
+
+        // Output style
+        system_prompt << "# Communication\n";
+        system_prompt << "- Be concise. Lead with the action or answer, not the reasoning.\n";
+        system_prompt << "- When you complete a task, summarize what you did and the verification result.\n";
+        system_prompt << "- If multiple tool calls are needed, make them all in one turn when possible.\n";
     }
-
-    // Error handling
-    system_prompt << "# Error Handling\n";
-    system_prompt << "- If a tool returns an error, analyze the error message carefully.\n";
-    system_prompt << "- For compilation errors: read the file at the error line, understand the issue, fix it.\n";
-    system_prompt << "- For test failures: read the failing test to understand what it expects.\n";
-    system_prompt << "- Never skip verification. Never assume code works without testing.\n";
-    system_prompt << "- If stuck after 3 attempts, explain the issue and ask the user for guidance.\n\n";
-
-    // Output style
-    system_prompt << "# Communication\n";
-    system_prompt << "- Be concise. Lead with the action or answer, not the reasoning.\n";
-    system_prompt << "- When you complete a task, summarize what you did and the verification result.\n";
-    system_prompt << "- If multiple tool calls are needed, make them all in one turn when possible.\n";
 
     // Load workspace-specific instructions (bolt.md or .bolt/prompt.md)
     const std::string workspace_prompt = load_workspace_prompt(workspace_root_);
@@ -636,8 +685,19 @@ std::vector<ChatMessage> Agent::build_chat_messages() const {
 }
 
 std::vector<ToolSchema> Agent::build_tool_schemas() const {
+    const bool filter_tools = runtime_config_.core_tools_only ||
+        detect_small_model(client_->model());
+
+    static const std::unordered_set<std::string> core_tools = {
+        "read_file", "write_file", "edit_file", "list_dir",
+        "search_code", "run_command", "build_and_test", "calculator"
+    };
+
     std::vector<ToolSchema> schemas;
     for (const Tool* tool : tools_.list()) {
+        if (filter_tools && core_tools.count(tool->name()) == 0) {
+            continue;
+        }
         schemas.push_back(tool->schema());
     }
     return schemas;
