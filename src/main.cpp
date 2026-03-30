@@ -6,6 +6,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #include "app/agent_cli_options.h"
@@ -53,6 +55,7 @@ int run_agent(int argc, char* argv[]) {
         for (size_t i = 0; i < args.size(); ++i) {
             const auto& a = args[i];
             if (a == "--debug" || a == "--no-debug" || a == "--resume") continue;
+            if (a == "-p" || a == "--print") { is_interactive = false; break; }
             if (a == "--model" && i + 1 < args.size()) { ++i; continue; }
             if (a.rfind("--", 0) != 0 && a.find(':') == std::string::npos) {
                 is_interactive = false;  // has a prompt
@@ -69,6 +72,40 @@ int run_agent(int argc, char* argv[]) {
         resolve_agent_cli_options(args, config);
     std::unique_ptr<Agent> agent =
         create_platform_agent(workspace_root, config, options, std::cin, std::cout);
+
+    // Pipe mode: read stdin and combine with prompt, then single-turn
+    bool stdin_piped = false;
+#ifdef _WIN32
+    stdin_piped = false; // TODO: Windows pipe detection
+#else
+    stdin_piped = !isatty(STDIN_FILENO);
+#endif
+
+    if (options.print_mode) {
+        std::string piped_input;
+        if (stdin_piped) {
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                piped_input += line + "\n";
+            }
+        }
+
+        std::string full_prompt = options.prompt;
+        if (!piped_input.empty()) {
+            if (!full_prompt.empty()) {
+                full_prompt = full_prompt + "\n\n" + piped_input;
+            } else {
+                full_prompt = piped_input;
+            }
+        }
+
+        if (full_prompt.empty()) {
+            std::cerr << "Error: No input provided. Use: echo 'query' | bolt agent -p\n";
+            return 1;
+        }
+
+        return run_agent_single_turn(*agent, full_prompt, std::cout);
+    }
 
     if (!options.prompt.empty()) {
         return run_agent_single_turn(*agent, options.prompt, std::cout);

@@ -9,6 +9,7 @@
 struct AgentCliOptions {
     bool debug = false;
     bool resume = false;
+    bool print_mode = false;  // -p flag: non-interactive, print response and exit
     std::string model;
     std::string prompt;
 };

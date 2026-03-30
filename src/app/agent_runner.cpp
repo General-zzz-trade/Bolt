@@ -192,7 +192,8 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         "/clear", "/compact", "/model", "/cost",
         "/debug", "/save", "/load", "/sessions", "/delete",
         "/export", "/undo", "/diff", "/status", "/reset",
-        "/sandbox", "/plugins", "/memory", "/team", "/skills"
+        "/sandbox", "/plugins", "/memory", "/team", "/skills",
+        "/init", "/context", "/doctor", "/plan", "/auto"
     };
     term_input.set_slash_commands(slash_commands);
     if (!workspace_root.empty()) {
@@ -302,6 +303,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             output << "\n\033[1;35m Context\033[0m\n";
             output << "  \033[1m/clear\033[0m             Clear conversation history\n";
             output << "  \033[1m/compact\033[0m           Compress context to save tokens\n";
+            output << "  \033[1m/context\033[0m           Show context window usage\n";
             output << "  \033[1m/undo\033[0m              Revert last file edit\n";
             output << "  \033[1m/reset\033[0m             Full reset (history + index)\n";
             output << "\n\033[1;35m Display\033[0m\n";
@@ -311,7 +313,12 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             output << "  \033[1m/debug\033[0m             Toggle debug mode\n";
             output << "  \033[1m/diff\033[0m              Show git diff\n";
             output << "  \033[1m/sandbox\033[0m           Show sandbox status\n";
+            output << "  \033[1m/doctor\033[0m            Run environment diagnostics\n";
+            output << "\n\033[1;35m Mode\033[0m\n";
+            output << "  \033[1m/plan\033[0m              Switch to plan mode (propose before executing)\n";
+            output << "  \033[1m/auto\033[0m              Switch to auto-approve mode (no confirmations)\n";
             output << "\n\033[1;35m System\033[0m\n";
+            output << "  \033[1m/init\033[0m              Create bolt.md with project instructions\n";
             output << "  \033[1m/plugins\033[0m           List installed plugins\n";
             output << "  \033[1m/skills\033[0m            List and load skills (.bolt/skills/*.md)\n";
             output << "  \033[1m/team\033[0m \033[2m<tasks>\033[0m      Run parallel tasks on separate git worktrees\n";
@@ -758,6 +765,179 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             } else if (subcmd == "clear") {
                 output << "\033[2mManually delete .bolt/memory.json or ~/.bolt/memory.json\033[0m\n";
             }
+            continue;
+        }
+
+        if (line == "/init") {
+            auto bolt_md_path = workspace_root / "bolt.md";
+            if (std::filesystem::exists(bolt_md_path)) {
+                output << "\033[33mbolt.md already exists. Edit it manually or delete and re-run /init.\033[0m\n";
+            } else {
+                // Auto-detect project type
+                std::string project_type = "unknown";
+                std::string build_cmd, test_cmd, lang;
+                if (std::filesystem::exists(workspace_root / "CMakeLists.txt")) {
+                    project_type = "C++ (CMake)";
+                    build_cmd = "cmake -B build -S . && cmake --build build -j$(nproc)";
+                    test_cmd = "./build/tests";
+                    lang = "C++";
+                } else if (std::filesystem::exists(workspace_root / "package.json")) {
+                    project_type = "JavaScript/TypeScript (Node.js)";
+                    build_cmd = "npm install && npm run build";
+                    test_cmd = "npm test";
+                    lang = "TypeScript";
+                } else if (std::filesystem::exists(workspace_root / "Cargo.toml")) {
+                    project_type = "Rust (Cargo)";
+                    build_cmd = "cargo build";
+                    test_cmd = "cargo test";
+                    lang = "Rust";
+                } else if (std::filesystem::exists(workspace_root / "go.mod")) {
+                    project_type = "Go";
+                    build_cmd = "go build ./...";
+                    test_cmd = "go test ./...";
+                    lang = "Go";
+                } else if (std::filesystem::exists(workspace_root / "requirements.txt") ||
+                           std::filesystem::exists(workspace_root / "setup.py") ||
+                           std::filesystem::exists(workspace_root / "pyproject.toml")) {
+                    project_type = "Python";
+                    build_cmd = "pip install -e .";
+                    test_cmd = "pytest";
+                    lang = "Python";
+                } else if (std::filesystem::exists(workspace_root / "Makefile")) {
+                    project_type = "Make";
+                    build_cmd = "make";
+                    test_cmd = "make test";
+                }
+
+                std::ofstream f(bolt_md_path);
+                f << "# Project Instructions\n\n";
+                f << "## Project Type\n" << project_type << "\n\n";
+                if (!build_cmd.empty()) {
+                    f << "## Build\n```bash\n" << build_cmd << "\n```\n\n";
+                }
+                if (!test_cmd.empty()) {
+                    f << "## Test\n```bash\n" << test_cmd << "\n```\n\n";
+                }
+                if (!lang.empty()) {
+                    f << "## Code Style\n- Language: " << lang << "\n";
+                }
+                f << "\n## Rules\n- Always read code before modifying it\n";
+                f << "- Run tests after making changes\n";
+                f << "- Keep changes minimal and focused\n";
+
+                output << "\033[32m" << "Created bolt.md" << "\033[0m\n";
+                output << "\033[2m  Project type: " << project_type << "\033[0m\n";
+                output << "\033[2m  Edit bolt.md to customize agent behavior.\033[0m\n";
+            }
+            continue;
+        }
+
+        if (line == "/context") {
+            auto msgs = agent.get_chat_messages();
+            int total_tokens = 0;
+            int system_tokens = 0;
+            int user_tokens = 0;
+            int assistant_tokens = 0;
+            int tool_tokens = 0;
+
+            for (const auto& m : msgs) {
+                int tokens = static_cast<int>((m.content.size() + 3) / 4);  // ~4 chars per token
+                for (const auto& tc : m.tool_calls) {
+                    tokens += static_cast<int>((tc.arguments.size() + tc.name.size() + 3) / 4);
+                }
+                total_tokens += tokens;
+                switch (m.role) {
+                    case ChatRole::system: system_tokens += tokens; break;
+                    case ChatRole::user: user_tokens += tokens; break;
+                    case ChatRole::assistant: assistant_tokens += tokens; break;
+                    case ChatRole::tool: tool_tokens += tokens; break;
+                }
+            }
+
+            output << "\n\033[1;35m Context Window\033[0m\n\n";
+            output << "  Messages:     " << msgs.size() << "\n";
+            output << "  Est. tokens:  ~" << total_tokens << "\n\n";
+
+            // Bar chart
+            int bar_width = 40;
+            auto bar = [&](const char* label, int tokens, const char* color) {
+                int width = total_tokens > 0 ? (tokens * bar_width / total_tokens) : 0;
+                if (width < 1 && tokens > 0) width = 1;
+                output << "  " << color << std::string(width, '#') << "\033[0m"
+                       << std::string(bar_width - width, '.')
+                       << "  " << label << " ~" << tokens << "\n";
+            };
+
+            bar("system", system_tokens, "\033[35m");
+            bar("user", user_tokens, "\033[32m");
+            bar("assistant", assistant_tokens, "\033[36m");
+            bar("tool", tool_tokens, "\033[33m");
+            output << "\n";
+            continue;
+        }
+
+        if (line == "/doctor") {
+            output << "\n\033[1;35m Diagnostics\033[0m\n\n";
+
+            // Check model
+            output << "  Model:        " << agent.model() << "\n";
+
+            // Check bwrap
+            bool bwrap = std::filesystem::exists("/usr/bin/bwrap") ||
+                         std::filesystem::exists("/usr/local/bin/bwrap");
+            output << "  Sandbox:      " << (bwrap ? "\033[32mbwrap available\033[0m" : "\033[33mbwrap not found\033[0m") << "\n";
+
+            // Check git
+            FILE* git_pipe = popen("git --version 2>&1", "r");
+            bool git_ok = false;
+            if (git_pipe) {
+                char buf[128];
+                std::string git_ver;
+                while (fgets(buf, sizeof(buf), git_pipe)) git_ver += buf;
+                git_ok = (pclose(git_pipe) == 0);
+                if (git_ok) {
+                    // Trim trailing newline
+                    while (!git_ver.empty() && (git_ver.back() == '\n' || git_ver.back() == '\r'))
+                        git_ver.pop_back();
+                    output << "  Git:          \033[32m" << git_ver << "\033[0m\n";
+                }
+            }
+            if (!git_ok) output << "  Git:          \033[33mnot found\033[0m\n";
+
+            // Check workspace
+            output << "  Workspace:    " << workspace_root.string() << "\n";
+            output << "  Files:        " << agent.file_index().file_count() << " indexed\n";
+
+            // Check config
+            auto config_path = workspace_root / "bolt.conf";
+            output << "  Config:       " << (std::filesystem::exists(config_path) ? "\033[32mbolt.conf\033[0m" : "\033[2mno bolt.conf\033[0m") << "\n";
+
+            auto bolt_md = workspace_root / "bolt.md";
+            output << "  Instructions: " << (std::filesystem::exists(bolt_md) ? "\033[32mbolt.md\033[0m" : "\033[2mno bolt.md (run /init)\033[0m") << "\n";
+
+            // Memory
+            output << "  Memory:       " << agent.workspace_memory().size() << " workspace, "
+                   << agent.global_memory().size() << " global\n";
+
+            // Token cost
+            auto total = tracker.total();
+            output << "  Tokens:       " << total.input_tokens << " in / " << total.output_tokens << " out\n";
+            output << "  Cost:         " << tracker.format_cost() << "\n";
+            output << "\n";
+            continue;
+        }
+
+        if (line == "/plan") {
+            output << "\033[2mPlan mode: Agent will show planned actions before executing.\033[0m\n";
+            output << "\033[2mTo enable at startup: bolt agent --approval-mode plan\033[0m\n";
+            output << "\033[2mOr set: approval.mode = plan in bolt.conf\033[0m\n";
+            continue;
+        }
+
+        if (line == "/auto") {
+            output << "\033[2mAuto mode: All tool calls will be auto-approved.\033[0m\n";
+            output << "\033[2mTo enable at startup: bolt agent --approval-mode auto\033[0m\n";
+            output << "\033[2mOr set: approval.mode = auto in bolt.conf\033[0m\n";
             continue;
         }
 

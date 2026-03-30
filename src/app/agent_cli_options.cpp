@@ -12,6 +12,7 @@ struct AgentCliOverrides {
     std::optional<bool> debug;
     std::optional<std::string> model;
     bool resume = false;
+    bool print_mode = false;
     std::string prompt;
 };
 
@@ -44,6 +45,11 @@ AgentCliOverrides parse_agent_cli_overrides(const std::vector<std::string>& args
         }
         if (current == "--resume") {
             overrides.resume = true;
+            ++index;
+            continue;
+        }
+        if (current == "-p" || current == "--print") {
+            overrides.print_mode = true;
             ++index;
             continue;
         }
@@ -90,6 +96,7 @@ AgentCliOptions resolve_agent_cli_options(const std::vector<std::string>& args,
     AgentCliOptions options;
     options.debug = overrides.debug.value_or(config.agent_runtime.default_debug);
     options.resume = overrides.resume;
+    options.print_mode = overrides.print_mode;
     options.model = overrides.model.value_or(config.default_model);
     options.prompt = overrides.prompt;
     return options;
