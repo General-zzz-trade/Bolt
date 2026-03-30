@@ -19,6 +19,12 @@ enum class TopLevelCommandType {
     api_server,
     doctor,
     init_workspace,
+    config,
+    auth,
+    update,
+    sessions,
+    plugins_cmd,
+    logs,
     invalid,
 };
 

@@ -4,6 +4,9 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
+
+#include <nlohmann/json.hpp>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -493,6 +496,257 @@ int main(int argc, char* argv[]) {
                 return run_mcp_server();
             case TopLevelCommandType::api_server:
                 return run_api_server(argc, argv);
+            case TopLevelCommandType::config: {
+                const auto ws = std::filesystem::current_path();
+                auto args = collect_cli_args(argc, argv, 2);
+
+                // bolt config — show current config
+                if (args.empty()) {
+                    std::cout << "\n\033[1;36m⚡ Bolt Configuration\033[0m\n\n";
+                    auto global_path = get_global_config_path();
+                    if (std::filesystem::exists(global_path)) {
+                        std::ifstream f(global_path);
+                        std::string content((std::istreambuf_iterator<char>(f)), {});
+                        std::cout << "  \033[1mGlobal\033[0m (" << global_path.string() << "):\n";
+                        std::cout << "  " << content << "\n";
+                    } else {
+                        std::cout << "  \033[2mNo global config (~/.bolt/config.json)\033[0m\n";
+                        std::cout << "  \033[2mRun 'bolt' to launch setup wizard\033[0m\n";
+                    }
+                    auto local_path = ws / "bolt.conf";
+                    if (std::filesystem::exists(local_path)) {
+                        std::ifstream f(local_path);
+                        std::string line;
+                        std::cout << "\n  \033[1mWorkspace\033[0m (" << local_path.string() << "):\n";
+                        while (std::getline(f, line)) {
+                            std::cout << "  " << line << "\n";
+                        }
+                    }
+                    std::cout << "\n";
+                }
+                // bolt config <key> — show value
+                else if (args.size() == 1) {
+                    std::cout << "\033[2mUse 'bolt config " << args[0] << " <value>' to set\033[0m\n";
+                }
+                // bolt config <key> <value> — set value in global config
+                else {
+                    SetupResult result;
+                    if (args[0] == "provider") {
+                        result.provider = args[1];
+                        // Try to load existing model
+                        auto global_path = get_global_config_path();
+                        if (std::filesystem::exists(global_path)) {
+                            std::ifstream f(global_path);
+                            try {
+                                auto j = nlohmann::json::parse(f);
+                                result.model = j.value("model", "");
+                            } catch (...) {}
+                        }
+                        result.completed = true;
+                    } else if (args[0] == "model") {
+                        result.model = args[1];
+                        auto global_path = get_global_config_path();
+                        if (std::filesystem::exists(global_path)) {
+                            std::ifstream f(global_path);
+                            try {
+                                auto j = nlohmann::json::parse(f);
+                                result.provider = j.value("provider", "ollama");
+                            } catch (...) {}
+                        }
+                        result.completed = true;
+                    }
+                    if (result.completed) {
+                        save_setup_config(result);
+                        std::cout << "\033[32m✓ Set " << args[0] << " = " << args[1] << "\033[0m\n";
+                    } else {
+                        std::cout << "\033[33mSupported keys: provider, model\033[0m\n";
+                    }
+                }
+                return 0;
+            }
+            case TopLevelCommandType::auth: {
+                auto args = collect_cli_args(argc, argv, 2);
+                std::cout << "\n\033[1;36m⚡ Bolt API Keys\033[0m\n\n";
+
+                struct KeyInfo { const char* name; const char* env; const char* url; };
+                KeyInfo keys[] = {
+                    {"Ollama", "", "(local, no key needed)"},
+                    {"OpenAI", "OPENAI_API_KEY", "https://platform.openai.com/api-keys"},
+                    {"Claude", "ANTHROPIC_API_KEY", "https://console.anthropic.com/"},
+                    {"Gemini", "GEMINI_API_KEY", "https://aistudio.google.com/apikey"},
+                    {"Groq", "GROQ_API_KEY", "https://console.groq.com/keys"},
+                    {"DeepSeek", "DEEPSEEK_API_KEY", "https://platform.deepseek.com/api_keys"},
+                    {"Qwen", "DASHSCOPE_API_KEY", "https://dashscope.console.aliyun.com/apiKey"},
+                    {"Zhipu GLM", "ZHIPU_API_KEY", "https://open.bigmodel.cn/usercenter/apikeys"},
+                    {"Moonshot", "MOONSHOT_API_KEY", "https://platform.moonshot.cn/console/api-keys"},
+                    {"Baichuan", "BAICHUAN_API_KEY", "https://platform.baichuan-ai.com/console/apikey"},
+                    {"Doubao", "VOLC_API_KEY", "https://console.volcengine.com/ark"},
+                };
+
+                for (const auto& k : keys) {
+                    if (k.env[0] == '\0') {
+                        std::cout << "  \033[32m✓\033[0m " << k.name << "  " << k.url << "\n";
+                        continue;
+                    }
+                    const char* val = std::getenv(k.env);
+                    bool set = val && std::string(val).size() > 0;
+                    std::cout << "  " << (set ? "\033[32m✓" : "\033[2m·") << "\033[0m "
+                              << k.name << "  \033[2m" << k.env << "\033[0m";
+                    if (!set) std::cout << "  → " << k.url;
+                    std::cout << "\n";
+                }
+
+                std::cout << "\n  \033[2mSet a key: export MOONSHOT_API_KEY=sk-your-key\033[0m\n";
+                std::cout << "  \033[2mOr run: bolt  (setup wizard will guide you)\033[0m\n\n";
+                return 0;
+            }
+            case TopLevelCommandType::update: {
+                std::cout << "\n\033[1;36m⚡ Bolt Update\033[0m\n\n";
+                std::cout << "  Current: 0.5.0\n\n";
+
+                // Check latest release via GitHub API
+                std::cout << "  \033[2mChecking for updates...\033[0m\n";
+                FILE* pipe = popen("curl -fsSL https://api.github.com/repos/General-zzz-trade/Bolt/releases/latest 2>/dev/null | grep '\"tag_name\"' | head -1", "r");
+                if (pipe) {
+                    char buf[256];
+                    std::string tag_line;
+                    while (fgets(buf, sizeof(buf), pipe)) tag_line += buf;
+                    pclose(pipe);
+
+                    // Extract version from "tag_name": "v0.5.0"
+                    auto pos = tag_line.find("\"v");
+                    if (pos != std::string::npos) {
+                        auto end = tag_line.find("\"", pos + 1);
+                        std::string latest = tag_line.substr(pos + 1, end - pos - 1);
+                        if (latest == "v0.5.0") {
+                            std::cout << "  \033[32m✓ Already on latest version (v0.5.0)\033[0m\n\n";
+                        } else {
+                            std::cout << "  \033[33mNew version available: " << latest << "\033[0m\n\n";
+                            std::cout << "  Update with:\n";
+                            std::cout << "    curl -fsSL https://raw.githubusercontent.com/General-zzz-trade/Bolt/master/install.sh | bash\n";
+                            std::cout << "    # or: npm update -g bolt-agent\n\n";
+                        }
+                    } else {
+                        std::cout << "  \033[33mCould not check for updates\033[0m\n\n";
+                    }
+                }
+                return 0;
+            }
+            case TopLevelCommandType::sessions: {
+                const auto ws = std::filesystem::current_path();
+                auto sessions_dir = ws / ".bolt" / "sessions";
+                std::cout << "\n\033[1;36m⚡ Saved Sessions\033[0m\n\n";
+
+                if (!std::filesystem::exists(sessions_dir)) {
+                    std::cout << "  \033[2mNo sessions saved.\033[0m\n\n";
+                    return 0;
+                }
+
+                std::error_code ec;
+                int count = 0;
+                for (const auto& entry : std::filesystem::directory_iterator(sessions_dir, ec)) {
+                    if (entry.path().extension() != ".json") continue;
+                    try {
+                        std::ifstream f(entry.path());
+                        auto j = nlohmann::json::parse(f);
+                        std::string id = j.value("id", entry.path().stem().string());
+                        std::string modified = j.value("modified_at", "");
+                        int msg_count = j.contains("messages") ? static_cast<int>(j["messages"].size()) : 0;
+
+                        // Find last user message
+                        std::string preview;
+                        if (j.contains("messages")) {
+                            for (auto it = j["messages"].rbegin(); it != j["messages"].rend(); ++it) {
+                                if ((*it).value("role", "") == "user") {
+                                    preview = (*it).value("content", "").substr(0, 60);
+                                    break;
+                                }
+                            }
+                        }
+
+                        std::cout << "  \033[1m" << id << "\033[0m  "
+                                  << msg_count << " msgs  "
+                                  << "\033[2m" << modified << "\033[0m\n";
+                        if (!preview.empty()) {
+                            std::cout << "    \033[2m" << preview << "\033[0m\n";
+                        }
+                        ++count;
+                    } catch (...) {}
+                }
+
+                if (count == 0) {
+                    std::cout << "  \033[2mNo sessions found.\033[0m\n";
+                }
+                std::cout << "\n  \033[2mResume: bolt agent --resume\033[0m\n";
+                std::cout << "  \033[2mLoad:   /load <session-id> in interactive mode\033[0m\n\n";
+                return 0;
+            }
+            case TopLevelCommandType::plugins_cmd: {
+                const auto ws = std::filesystem::current_path();
+                std::cout << "\n\033[1;36m⚡ Bolt Plugins\033[0m\n\n";
+
+                auto args = collect_cli_args(argc, argv, 2);
+
+                // bolt plugins (or bolt plugins list)
+                bool found = false;
+                for (const auto& dir_path : {ws / ".bolt" / "plugins",
+                     std::filesystem::path(std::getenv("HOME") ? std::getenv("HOME") : "") / ".bolt" / "plugins"}) {
+                    if (!std::filesystem::exists(dir_path)) continue;
+                    std::error_code ec;
+                    for (const auto& entry : std::filesystem::directory_iterator(dir_path, ec)) {
+                        if (!entry.is_directory()) continue;
+                        auto manifest = entry.path() / "plugin.json";
+                        if (!std::filesystem::exists(manifest)) continue;
+                        try {
+                            std::ifstream f(manifest);
+                            auto j = nlohmann::json::parse(f);
+                            std::string name = j.value("name", entry.path().filename().string());
+                            std::string desc = j.value("description", "");
+                            int tool_count = j.contains("tools") ? static_cast<int>(j["tools"].size()) : 0;
+                            std::cout << "  \033[1m" << name << "\033[0m  \033[2m" << desc
+                                      << " (" << tool_count << " tools)\033[0m\n";
+                            found = true;
+                        } catch (...) {}
+                    }
+                }
+
+                if (!found) {
+                    std::cout << "  \033[2mNo plugins installed.\033[0m\n";
+                }
+
+                std::cout << "\n  \033[2mPlugin directories:\033[0m\n";
+                std::cout << "    .bolt/plugins/       (workspace)\n";
+                std::cout << "    ~/.bolt/plugins/     (global)\n";
+                std::cout << "\n  \033[2mEach plugin needs a plugin.json manifest.\033[0m\n";
+                std::cout << "  \033[2mSee: https://github.com/General-zzz-trade/Bolt#plugin-system\033[0m\n\n";
+                return 0;
+            }
+            case TopLevelCommandType::logs: {
+                const auto ws = std::filesystem::current_path();
+                auto log_path = ws / ".bolt" / "audit.log";
+                std::cout << "\n\033[1;36m⚡ Bolt Audit Log\033[0m\n\n";
+
+                if (!std::filesystem::exists(log_path)) {
+                    std::cout << "  \033[2mNo audit log found.\033[0m\n\n";
+                    return 0;
+                }
+
+                // Show last 20 lines
+                std::ifstream f(log_path);
+                std::vector<std::string> lines;
+                std::string line;
+                while (std::getline(f, line)) {
+                    lines.push_back(line);
+                }
+
+                int start = lines.size() > 20 ? static_cast<int>(lines.size()) - 20 : 0;
+                std::cout << "  \033[2m" << log_path.string() << " (" << lines.size() << " entries)\033[0m\n\n";
+                for (int i = start; i < static_cast<int>(lines.size()); ++i) {
+                    std::cout << "  " << lines[i] << "\n";
+                }
+                std::cout << "\n";
+                return 0;
+            }
             case TopLevelCommandType::invalid:
                 print_usage(argv[0]);
                 return 1;

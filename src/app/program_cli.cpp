@@ -51,6 +51,24 @@ TopLevelCommand resolve_top_level_command(const std::vector<std::string>& args) 
     if (command == "init") {
         return {TopLevelCommandType::init_workspace, command};
     }
+    if (command == "config") {
+        return {TopLevelCommandType::config, command};
+    }
+    if (command == "auth") {
+        return {TopLevelCommandType::auth, command};
+    }
+    if (command == "update") {
+        return {TopLevelCommandType::update, command};
+    }
+    if (command == "sessions") {
+        return {TopLevelCommandType::sessions, command};
+    }
+    if (command == "plugins") {
+        return {TopLevelCommandType::plugins_cmd, command};
+    }
+    if (command == "logs") {
+        return {TopLevelCommandType::logs, command};
+    }
     // Unknown command — treat as agent prompt (e.g. "bolt 'Read main.cpp'")
     return {TopLevelCommandType::invalid, command};
 }
@@ -72,6 +90,12 @@ std::string build_usage_text(const std::string& program_name) {
     output << "  " << program_name << " bench [--rounds 5]           Performance benchmark\n";
     output << "  " << program_name << " init                         Create bolt.md project config\n";
     output << "  " << program_name << " doctor                       Check environment & dependencies\n";
+    output << "  " << program_name << " config [key] [value]         View or set configuration\n";
+    output << "  " << program_name << " auth [provider]              Manage API keys\n";
+    output << "  " << program_name << " update                       Update to latest version\n";
+    output << "  " << program_name << " sessions                     List saved sessions\n";
+    output << "  " << program_name << " plugins [list|install]       Manage plugins\n";
+    output << "  " << program_name << " logs                         View audit log\n";
 
     output << "\n\033[1mAgent options:\033[0m\n";
     output << "  --model <name>       Set LLM model (e.g. moonshot-v1-128k, gpt-4o)\n";
