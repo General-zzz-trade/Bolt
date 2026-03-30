@@ -139,10 +139,59 @@ struct UndoEntry {
 
 std::string build_agent_banner(const Agent& agent) {
     std::ostringstream output;
-    output << "\n\033[1;36m ⚡ Bolt\033[0m — AI Coding Agent\n";
-    output << "\033[2m   Model: " << agent.model() << "\n";
-    output << "   Debug: " << (agent.debug_enabled() ? "on" : "off") << "\n";
-    output << "   Tips:  /help for commands, @file to include files, Ctrl+C to cancel\033[0m\n";
+
+    // Gather info
+    std::string model = agent.model();
+    int tool_count = static_cast<int>(agent.available_tool_names().size());
+
+    // Build content lines (without box decorations)
+    std::vector<std::string> lines;
+    lines.push_back("\033[1;36m⚡ Bolt\033[0m \033[2m— AI Coding Agent\033[0m");
+    lines.push_back("");
+    lines.push_back("\033[2mModel:\033[0m  " + model);
+    lines.push_back("\033[2mTools:\033[0m  " + std::to_string(tool_count) + " available");
+    lines.push_back("\033[2mDebug:\033[0m  " + std::string(agent.debug_enabled() ? "on" : "off"));
+    lines.push_back("");
+    lines.push_back("\033[2m/help commands   @file reference\033[0m");
+    lines.push_back("\033[2mCtrl+C cancel    Ctrl+D exit\033[0m");
+
+    // Calculate visible width for each line (strip ANSI escape codes)
+    auto visible_len = [](const std::string& s) -> std::size_t {
+        std::size_t len = 0;
+        bool in_escape = false;
+        for (char c : s) {
+            if (c == '\033') { in_escape = true; continue; }
+            if (in_escape) { if (c == 'm') in_escape = false; continue; }
+            ++len;
+        }
+        return len;
+    };
+
+    // Find max visible width
+    std::size_t max_width = 0;
+    for (const auto& l : lines) {
+        auto w = visible_len(l);
+        if (w > max_width) max_width = w;
+    }
+    max_width += 2;  // padding inside box
+
+    // Build horizontal rule from box-drawing chars
+    auto hrule = [](std::size_t count) -> std::string {
+        std::string s;
+        for (std::size_t i = 0; i < count; ++i) s += "\u2500";
+        return s;
+    };
+
+    // Draw box
+    output << "\n";
+    output << " \033[2m\u250c" << hrule(max_width + 2) << "\u2510\033[0m\n";
+    for (const auto& l : lines) {
+        auto vw = visible_len(l);
+        std::size_t pad = max_width - vw;
+        output << " \033[2m\u2502\033[0m " << l << std::string(pad + 1, ' ') << "\033[2m\u2502\033[0m\n";
+    }
+    output << " \033[2m\u2514" << hrule(max_width + 2) << "\u2518\033[0m\n";
+
     return output.str();
 }
 
@@ -195,7 +244,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         "/sandbox", "/plugins", "/memory", "/team", "/skills",
         "/init", "/context", "/doctor", "/plan", "/auto",
         "/stop", "/fast", "/think", "/verbose", "/tools",
-        "/btw", "/whoami", "/id"
+        "/btw", "/whoami", "/id", "/rename"
     };
     term_input.set_slash_commands(slash_commands);
     if (!workspace_root.empty()) {
@@ -242,6 +291,10 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         }
     };
 
+    // Prompt state for context-aware coloring
+    enum class PromptState { ready, warning, error };
+    PromptState prompt_state = PromptState::ready;
+
     // Main loop
     while (true) {
         // Check for terminal resize
@@ -250,8 +303,13 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             renderer.update_terminal_width();
         }
 
-        // Determine prompt color
-        std::string prompt = "\033[1;32m❯ \033[0m";
+        // Determine prompt color based on state
+        std::string prompt;
+        switch (prompt_state) {
+            case PromptState::ready:   prompt = "\033[1;32m❯ \033[0m"; break;
+            case PromptState::warning: prompt = "\033[1;33m❯ \033[0m"; break;
+            case PromptState::error:   prompt = "\033[1;31m❯ \033[0m"; break;
+        }
 
         SignalHandler::instance().reset();
         auto line_opt = term_input.read_line(prompt);
@@ -266,6 +324,8 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         std::string line = line_opt.value();
 
         if (term_input.cancelled()) {
+            output << "\033[33m  \u2298 Cancelled\033[0m\n";
+            prompt_state = PromptState::warning;
             continue;
         }
 
@@ -304,6 +364,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             output << "  \033[1m/sessions\033[0m          List saved sessions\n";
             output << "  \033[1m/delete\033[0m \033[2m<id>\033[0m     Delete a session\n";
             output << "  \033[1m/export\033[0m \033[2m[file]\033[0m   Export chat to markdown\n";
+            output << "  \033[1m/rename\033[0m \033[2m<name>\033[0m   Rename current session\n";
             output << "  \033[1m/memory\033[0m \033[2m[cmd]\033[0m    Manage persistent memory\n";
             output << "  \033[1m/whoami\033[0m            Show session info (model, tokens, cost)\n";
             output << "\n\033[1;35m Context\033[0m\n";
@@ -1082,6 +1143,22 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             continue;
         }
 
+        // /rename <name> — rename current session
+        if (line.rfind("/rename ", 0) == 0) {
+            std::string new_name = trim(line.substr(8));
+            if (new_name.empty()) {
+                output << "\033[33mUsage: /rename <name>\033[0m\n";
+            } else {
+                current_session_id = new_name;
+                output << "\033[2mSession renamed to: " << new_name << "\033[0m\n";
+            }
+            continue;
+        }
+        if (line == "/rename") {
+            output << "\033[33mUsage: /rename <name>\033[0m\n";
+            continue;
+        }
+
         // Unknown slash command
         if (line[0] == '/') {
             output << "\033[33mUnknown command: " << line << ". Type /help for available commands.\033[0m\n";
@@ -1141,6 +1218,13 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
                     }
                 }
 
+                // Multi-step progress prefix
+                std::string step_prefix;
+                if (trace.size() > 1) {
+                    step_prefix = "\033[2m[" + std::to_string(i + 1) + "/"
+                                  + std::to_string(trace.size()) + "]\033[0m ";
+                }
+
                 // Live tool call display
                 if (step.status == ExecutionStepStatus::planned) {
                     // Tool is about to run — show spinner-like indicator
@@ -1178,37 +1262,57 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
                         arg_hint.pop_back();
 
                     output << "\r\033[K"  // Clear line
-                           << "  \033[33m⠋\033[0m \033[2m" << tool_desc;
+                           << "  " << step_prefix << "\033[33m\u280b\033[0m \033[2m" << tool_desc;
                     if (!arg_hint.empty()) output << " \033[36m" << arg_hint << "\033[0m";
                     output << "\033[0m" << std::flush;
                 } else if (step.status == ExecutionStepStatus::completed) {
-                    // Tool succeeded
-                    std::string summary;
-                    if (step.detail.size() > 80) {
-                        summary = step.detail.substr(0, 77) + "...";
+                    // Tool succeeded — fold long output
+                    std::string summary = step.detail;
+                    int line_count = static_cast<int>(
+                        std::count(summary.begin(), summary.end(), '\n'));
+                    if (line_count > 3 || summary.size() > 200) {
+                        // Show first 2 lines + truncation notice
+                        std::string truncated;
+                        int shown = 0;
+                        for (std::size_t ci = 0; ci < summary.size() && shown < 2; ++ci) {
+                            truncated += summary[ci];
+                            if (summary[ci] == '\n') ++shown;
+                        }
+                        // Remove trailing newline for inline display
+                        while (!truncated.empty() &&
+                               (truncated.back() == '\n' || truncated.back() == '\r'))
+                            truncated.pop_back();
+                        // Replace remaining newlines
+                        for (auto& c : truncated) if (c == '\n') c = ' ';
+                        summary = truncated + " ... (" + std::to_string(line_count - 2)
+                                  + " more lines)";
                     } else {
-                        summary = step.detail;
+                        if (summary.size() > 80) {
+                            summary = summary.substr(0, 77) + "...";
+                        }
+                        // Replace newlines in summary
+                        for (auto& c : summary) if (c == '\n') c = ' ';
                     }
-                    // Replace newlines in summary
-                    for (auto& c : summary) if (c == '\n') c = ' ';
 
                     output << "\r\033[K"  // Clear line
-                           << "  \033[32m✓\033[0m \033[2m" << step.tool_name
-                           << "\033[0m";
+                           << "  " << step_prefix << "\033[32m\u2713\033[0m \033[2m"
+                           << step.tool_name << "\033[0m";
                     if (!summary.empty() && summary != "Pending execution") {
-                        output << " \033[2m— " << summary << "\033[0m";
+                        output << " \033[2m\u2014 " << summary << "\033[0m";
                     }
                     output << "\n" << std::flush;
                 } else if (step.status == ExecutionStepStatus::failed) {
                     std::string err = step.detail.substr(0, 80);
                     for (auto& c : err) if (c == '\n') c = ' ';
                     output << "\r\033[K"
-                           << "  \033[31m✗\033[0m \033[2m" << step.tool_name
+                           << "  " << step_prefix << "\033[31m\u2717\033[0m \033[2m"
+                           << step.tool_name
                            << "\033[0m \033[31m" << err << "\033[0m\n" << std::flush;
                 } else if (step.status == ExecutionStepStatus::denied ||
                            step.status == ExecutionStepStatus::blocked) {
                     output << "\r\033[K"
-                           << "  \033[33m⊘\033[0m \033[2m" << step.tool_name
+                           << "  " << step_prefix << "\033[33m\u2298\033[0m \033[2m"
+                           << step.tool_name
                            << "\033[0m \033[33m" << step.detail.substr(0, 60) << "\033[0m\n"
                            << std::flush;
                 }
@@ -1253,10 +1357,20 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             renderer.render_status_bar(agent.model(), total.input_tokens, total.output_tokens,
                                        current_session_id);
 
+            prompt_state = PromptState::ready;
+
         } catch (const std::exception& e) {
             if (first_token && !spinner_stopped_for_tools) spinner.stop();
             renderer.end_stream();
-            output << "\n\033[31mError: " << e.what() << "\033[0m\n";
+            std::string err_msg = e.what();
+            if (SignalHandler::instance().is_cancelled() ||
+                err_msg.find("cancel") != std::string::npos) {
+                output << "\n\033[33m  \u2298 Cancelled\033[0m\n";
+                prompt_state = PromptState::warning;
+            } else {
+                output << "\n\033[31mError: " << err_msg << "\033[0m\n";
+                prompt_state = PromptState::error;
+            }
         }
 
         // Auto-save
