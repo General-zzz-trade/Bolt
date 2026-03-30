@@ -95,13 +95,23 @@ async function main() {
     // Clean up partial download
     try { fs.unlinkSync(binPath); } catch (_) {}
 
-    console.error(`\nFailed to download pre-built binary: ${err.message}`);
-    console.error(`\nThe pre-built binary for v${VERSION} (${os.platform()}-${os.arch()}) was not found.`);
-    console.error("\nTo use bolt, build from source:");
-    console.error(`  git clone https://github.com/${REPO}.git && cd Bolt`);
-    console.error("  cmake -B build -S . && cmake --build build -j8");
-    console.error(`  cp build/bolt${os.platform() === "win32" ? ".exe" : ""} ${binDir}/`);
-    console.error(`\nOr download manually: https://github.com/${REPO}/releases`);
+    console.error(`\n  Failed to download: ${err.message}`);
+    console.error(`\n  URL: ${releaseUrl}`);
+    console.error(`\n  This may be due to:`);
+    console.error(`    - Network issues (proxy/firewall blocking GitHub)`);
+    console.error(`    - Release v${VERSION} not yet available for your platform`);
+    console.error(`\n  Fix options:`);
+
+    if (os.platform() === "win32") {
+      console.error(`    1. Run manually: node "${path.join(__dirname, "install.js")}"`);
+      console.error(`    2. Download from: https://github.com/${REPO}/releases`);
+      console.error(`       Save as: ${binPath}`);
+      console.error(`    3. PowerShell: iwr -useb https://raw.githubusercontent.com/${REPO}/master/install.ps1 | iex`);
+    } else {
+      console.error(`    1. Run manually: node "${path.join(__dirname, "install.js")}"`);
+      console.error(`    2. curl -fsSL https://raw.githubusercontent.com/${REPO}/master/install.sh | bash`);
+      console.error(`    3. Download from: https://github.com/${REPO}/releases`);
+    }
 
     // Don't fail npm install — user can place binary manually
     process.exit(0);
