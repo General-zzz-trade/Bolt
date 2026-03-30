@@ -102,6 +102,10 @@ if (WIN32)
         src/app/model_client_factory.cpp
     )
     target_link_libraries(bolt_core PUBLIC user32 winhttp ws2_32)
+    # Static link MinGW runtime so .exe works without MSYS2 DLLs
+    if (MINGW)
+        target_link_options(bolt_core PUBLIC -static -static-libgcc -static-libstdc++)
+    endif()
 elseif (UNIX)
     target_sources(bolt_core PRIVATE
         src/platform/linux/linux_agent_factory.cpp
