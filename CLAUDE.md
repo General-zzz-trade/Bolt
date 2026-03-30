@@ -24,19 +24,19 @@ cmake --build build -j$(nproc) --target bolt
 ## Test
 
 ```bash
-./build/kernel_tests              # 70 unit tests
+./build/kernel_tests              # 71 unit tests
 ./build/agent_integration_tests   # 3 integration tests
-./build/capability_tests          # 41 capability tests
+./build/capability_tests          # 65 capability tests
 ./build/e2e_tests                 # 9 E2E tests
 ./build/sse_parser_tests          # 10 SSE parser tests
 ./build/mcp_server_tests          # 8 MCP server tests
 ./build/approval_provider_tests   # 6 approval provider tests
-./build/api_e2e_tests             # 12 API E2E tests
+./build/api_e2e_tests             # 7 API E2E tests (requires LLM API key)
 ```
 
 All tests must pass before PR. Run all:
 ```bash
-./build/kernel_tests && ./build/agent_integration_tests && ./build/capability_tests && ./build/e2e_tests && ./build/sse_parser_tests && ./build/mcp_server_tests && ./build/approval_provider_tests && ./build/api_e2e_tests
+./build/kernel_tests && ./build/agent_integration_tests && ./build/capability_tests && ./build/e2e_tests && ./build/sse_parser_tests && ./build/mcp_server_tests && ./build/approval_provider_tests
 ```
 
 ## Run
@@ -44,27 +44,37 @@ All tests must pass before PR. Run all:
 ```bash
 ./build/bolt                              # Interactive mode
 ./build/bolt agent "prompt here"          # Single-turn
-./build/bolt agent -p                     # Pipe mode
+./build/bolt agent -p                     # Pipe mode (stdin)
 ./build/bolt agent --resume               # Resume last session
-./build/bolt web-chat --port 8080         # Web UI
-./build/bolt api-server --port 9090       # REST API
+./build/bolt api-server --port 9090       # REST API + React Web UI
+./build/bolt web-chat --port 8080         # Legacy Web UI
 ./build/bolt mcp-server                   # MCP server
 ./build/bolt telegram                     # Telegram bot
 ./build/bolt discord                      # Discord bot
 ./build/bolt wechat                       # WeChat bot
 ./build/bolt slack                        # Slack bot
 ./build/bolt bench --rounds 5             # Benchmark
+./build/bolt init                         # Create bolt.md project config
+./build/bolt doctor                       # Environment diagnostics
+./build/bolt config [key] [value]         # View/set configuration
+./build/bolt auth                         # Manage API keys
+./build/bolt update                       # Check for updates
+./build/bolt sessions                     # List saved sessions
+./build/bolt plugins                      # List plugins
+./build/bolt logs                         # View audit log
+./build/bolt -v                           # Version
 ```
 
 ## Interactive Commands
 
 ```
-Session:    /save [name]  /load <id>  /sessions  /delete <id>  /export [file]  /memory
-Context:    /clear  /compact  /undo  /reset  /context
-Display:    /model  /cost  /status  /debug  /diff  /doctor
-Mode:       /plan  /auto
-System:     /quit  /help  /init  /sandbox  /plugins  /skills  /team  /bench
+Session:    /save [name]  /load <id>  /sessions  /delete <id>  /export [file]  /memory  /whoami
+Context:    /clear  /compact  /undo  /reset  /context  /btw <question>
+Display:    /model  /cost  /status  /tools [verbose]  /diff  /doctor
+Mode:       /fast  /think [level]  /verbose  /plan  /auto
+System:     /quit  /help  /init  /stop  /sandbox  /plugins  /skills  /team
 
+Shell:      ! <command>       Execute shell without leaving Bolt
 Shortcuts:  Ctrl+C cancel  Ctrl+L clear  Ctrl+D exit  ↑/↓ history  Tab complete
 File ref:   @file or @file:10-20 to include file contents in prompt
 ```
@@ -82,11 +92,13 @@ src/
     signal_handler      # Ctrl+C cancellation, SIGWINCH resize
     token_tracker       # Token usage and cost estimation
     rate_limiter        # HTTP request rate limiting
+    api_server          # REST API + static file server (React UI)
+    setup_wizard        # First-launch provider/model/API key wizard
     wechat_bot          # WeChat gateway
     slack_bot           # Slack gateway
   core/
     caching/    # Tool result cache
-    config/     # Runtime/policy configs
+    config/     # Runtime/policy/sandbox configs
     indexing/   # Trigram file index, semantic index, prefetch
     interfaces/ # Abstract interfaces (I-prefixed)
     mcp/        # MCP server protocol
@@ -96,12 +108,15 @@ src/
     session/    # Session persistence, persistent memory
     threading/  # Thread pool
   platform/
-    linux/      # Linux implementations (libcurl, fork/exec, /proc)
+    linux/      # Linux implementations (libcurl, fork/exec, /proc, bubblewrap sandbox)
     windows/    # Windows implementations (WinHTTP, CreateProcess)
   providers/    # LLM clients: OpenAI, Claude, Gemini, Ollama, Groq, DeepSeek,
                 #   Qwen, GLM, Moonshot, Baichuan, Doubao
-tests/          # 8 test executables, 159 total tests
-web/            # Web UI (dark/light theme, Markdown, SSE streaming)
+bolt-ui/        # React frontend (Vite + React 18 + TypeScript + Tailwind)
+  src-tauri/    # Tauri desktop app wrapper
+web-dist/       # React build output (served by api-server)
+tests/          # 8 test executables, 172 total tests
+web/            # Legacy Web UI
 vscode-extension/  # VS Code sidebar chat extension
 npm/            # npm package (bolt-agent)
 ```
@@ -153,3 +168,10 @@ npm/            # npm package (bolt-agent)
 - `SpeculativeExecutor` runs read-only tools during streaming; only safe (read-only) tools are speculated, never write tools
 - `MemoryStore` persists cross-session facts to `~/.bolt/memory.json` (global) and `.bolt/memory.json` (workspace)
 - Auto-verify runs `build_and_test` after code edits; max 3 retries; disable with `agent.auto_verify=false`
+- `~/.bolt/env` stores API keys saved by setup wizard; auto-loaded at startup via `load_bolt_env_file()`
+- `api-server` serves React UI from `web-dist/` directory + all `/api/*` endpoints on one port
+- `api-server` binds to `0.0.0.0` (all interfaces) for remote access
+- edit_file and write_file accept both legacy `old<<<>>>` format and JSON `{"path","old","new"}` format
+- Small models (name contains 8k/mini/flash/turbo/instant) auto-enable compact prompt + core tools filter
+- Trace observer must be cleared before slash commands to prevent ASAN stack-use-after-scope
+- Windows builds need `#ifdef _WIN32` guards for: termios, sigaction, isatty, WIFEXITED, setsockopt timeval, ssize_t
