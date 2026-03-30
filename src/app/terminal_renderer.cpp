@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <io.h>
+#endif
+
 #include "../core/interfaces/approval_provider.h"
 
 namespace {
@@ -154,7 +158,11 @@ int parse_hunk_start(const std::string& hunk_header) {
 TerminalRenderer::TerminalRenderer(std::ostream& output)
     : output_(output) {
     // Detect color support
+#ifdef _WIN32
+    if (!_isatty(_fileno(stdout))) {
+#else
     if (!isatty(STDOUT_FILENO)) {
+#endif
         colors_enabled_ = false;
     } else {
         const char* term = std::getenv("TERM");

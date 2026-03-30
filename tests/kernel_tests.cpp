@@ -826,7 +826,8 @@ void expect_run_command_executes_allowed_command() {
     expect_equal(result.success, true, "Whitelisted command should succeed");
     expect_equal(runner->last_command, "git status",
                  "Command runner should receive the validated command");
-    expect_equal(runner->last_working_directory.string(), temp_dir.path().string(),
+    expect_equal(runner->last_working_directory.string(),
+                 std::filesystem::weakly_canonical(temp_dir.path()).string(),
                  "Command runner should receive the workspace root");
     expect_true(runner->last_timeout_ms == CommandPolicyConfig{}.timeout_ms,
                 "Command runner should receive the configured timeout");
