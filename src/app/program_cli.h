@@ -11,6 +11,8 @@ enum class TopLevelCommandType {
     web_chat,
     telegram,
     discord,
+    wechat,
+    slack,
     bench,
     mcp_server,
     api_server,

@@ -26,6 +26,7 @@
 #include "type_text_tool.h"
 #include "wait_for_window_tool.h"
 #include "browser_tool.h"
+#include "email_tool.h"
 #include "web_fetch_tool.h"
 #include "web_search_tool.h"
 #include "write_file_tool.h"
@@ -83,6 +84,7 @@ ToolRegistry create_default_tool_registry(
     if (http_transport != nullptr) {
         tools.register_tool(std::make_unique<WebFetchTool>(http_transport));
         tools.register_tool(std::make_unique<WebSearchTool>(http_transport));
+        tools.register_tool(std::make_unique<EmailTool>(http_transport));
     }
     // Load plugins from workspace and global dirs
     PluginLoader plugin_loader(command_runner);

@@ -24,6 +24,12 @@ TopLevelCommand resolve_top_level_command(const std::vector<std::string>& args) 
     if (command == "discord") {
         return {TopLevelCommandType::discord, command};
     }
+    if (command == "wechat") {
+        return {TopLevelCommandType::wechat, command};
+    }
+    if (command == "slack") {
+        return {TopLevelCommandType::slack, command};
+    }
     if (command == "bench") {
         return {TopLevelCommandType::bench, command};
     }
@@ -49,6 +55,8 @@ std::string build_usage_text(const std::string& program_name) {
     output << "  " << program_name << " web-chat [--port 8080]    Browser-based chat UI\n";
     output << "  " << program_name << " telegram                  Telegram bot gateway (TELEGRAM_BOT_TOKEN)\n";
     output << "  " << program_name << " discord                   Discord bot gateway (DISCORD_BOT_TOKEN)\n";
+    output << "  " << program_name << " wechat                   WeChat gateway (WECHAT_WEBHOOK_URL)\n";
+    output << "  " << program_name << " slack                    Slack bot gateway (SLACK_BOT_TOKEN)\n";
     output << "  " << program_name << " bench [--rounds 5]        Performance benchmark\n";
     output << "  " << program_name << " mcp-server               MCP protocol server (stdin/stdout)\n";
     output << "  " << program_name << " api-server [--port 9090] REST API server\n";

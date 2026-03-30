@@ -54,6 +54,7 @@ add_library(bolt_core STATIC
         src/agent/task_planner_tool.cpp
         src/agent/task_runner.cpp
         src/agent/type_text_tool.cpp
+        src/agent/email_tool.cpp
         src/agent/tool_set_factory.cpp
         src/agent/tool_registry.cpp
         src/agent/speculative_executor.cpp
@@ -128,6 +129,8 @@ add_executable(bolt
         src/app/api_server.cpp
         src/app/telegram_gateway.cpp
         src/app/discord_gateway.cpp
+        src/app/wechat_gateway.cpp
+        src/app/slack_gateway.cpp
         src/app/web_chat_server.cpp
 )
 if (WIN32)

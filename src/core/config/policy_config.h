@@ -26,6 +26,7 @@ struct PolicyConfig {
         "write_file",
         "edit_file",
         "delete_file",
+        "send_email",
     };
 
     std::unordered_set<std::string> bounded_command_tools = {
