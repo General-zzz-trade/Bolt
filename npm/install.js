@@ -79,13 +79,27 @@ async function main() {
 
   fs.mkdirSync(binDir, { recursive: true });
 
-  // Try downloading from GitHub Releases
-  const releaseUrl = `https://github.com/${REPO}/releases/download/v${VERSION}/${binaryName}`;
+  // Try downloading from GitHub Releases (try exact version, then latest)
+  const urls = [
+    `https://github.com/${REPO}/releases/download/v${VERSION}/${binaryName}`,
+    `https://github.com/${REPO}/releases/latest/download/${binaryName}`,
+  ];
   console.log(`Downloading bolt v${VERSION} for ${os.platform()}-${os.arch()}...`);
-  console.log(`  URL: ${releaseUrl}`);
+  const releaseUrl = urls[0];
 
   try {
-    await download(releaseUrl, binPath);
+    let downloaded = false;
+    for (const url of urls) {
+      try {
+        console.log(`  Trying: ${url}`);
+        await download(url, binPath);
+        downloaded = true;
+        break;
+      } catch (e) {
+        console.log(`  Not found, trying next...`);
+      }
+    }
+    if (!downloaded) throw new Error("All download URLs failed");
     // Make executable on Unix
     if (os.platform() !== "win32") {
       fs.chmodSync(binPath, 0o755);
