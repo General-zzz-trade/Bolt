@@ -1,6 +1,7 @@
 #include "calculator_tool.h"
 
 #include <cctype>
+#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -42,13 +43,13 @@ private:
     }
 
     double parse_term() {
-        double value = parse_factor();
+        double value = parse_power();
         while (true) {
             skip_whitespace();
             if (match('*')) {
-                value *= parse_factor();
+                value *= parse_power();
             } else if (match('/')) {
-                const double divisor = parse_factor();
+                const double divisor = parse_power();
                 if (divisor == 0.0) {
                     throw std::runtime_error("Division by zero");
                 }
@@ -57,6 +58,16 @@ private:
                 return value;
             }
         }
+    }
+
+    double parse_power() {
+        double base = parse_factor();
+        skip_whitespace();
+        if (match('^')) {
+            double exponent = parse_power();  // Right-associative: 2^3^2 = 2^(3^2)
+            return std::pow(base, exponent);
+        }
+        return base;
     }
 
     double parse_factor() {
@@ -126,7 +137,7 @@ std::string CalculatorTool::name() const {
 }
 
 std::string CalculatorTool::description() const {
-    return "Evaluate arithmetic expressions with +, -, *, / and parentheses.";
+    return "Evaluate arithmetic expressions with +, -, *, /, ^ (power) and parentheses.";
 }
 
 ToolResult CalculatorTool::run(const std::string& args) const {
