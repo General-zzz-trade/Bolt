@@ -177,7 +177,38 @@ std::string McpServer::handle_tools_call(const std::string& id,
     for (const auto& tool : tools_) {
         if (tool.name == tool_name) {
             try {
-                const std::string result = tool.execute(arguments);
+                // Convert JSON arguments to the format tools expect
+                std::string tool_args = arguments;
+                try {
+                    auto j = json::parse(arguments);
+                    // Tools with JSON-native parsers: pass raw JSON
+                    if (tool_name == "edit_file" || tool_name == "write_file" ||
+                        tool_name == "send_email" || tool_name == "browser") {
+                        tool_args = arguments;
+                    } else if (j.contains("args") && j["args"].is_string()) {
+                        tool_args = j["args"].get<std::string>();
+                    } else if (j.contains("command") && j["command"].is_string()) {
+                        tool_args = j["command"].get<std::string>();
+                    } else if (j.contains("query") && j["query"].is_string()) {
+                        // search_code: convert {"query":"x","mode":"text"} to "query=x\nmode=text"
+                        std::string result_args;
+                        for (auto it = j.begin(); it != j.end(); ++it) {
+                            if (!result_args.empty()) result_args += "\n";
+                            result_args += it.key() + "=" +
+                                (it->is_string() ? it->get<std::string>() : it->dump());
+                        }
+                        tool_args = result_args;
+                    } else if (j.contains("path") && j["path"].is_string() && j.size() == 1) {
+                        tool_args = j["path"].get<std::string>();
+                    } else if (j.size() == 1 && j.begin()->is_string()) {
+                        tool_args = j.begin()->get<std::string>();
+                    }
+                    // else: pass raw JSON, let tool parse it
+                } catch (...) {
+                    // Not valid JSON, pass as-is
+                }
+
+                const std::string result = tool.execute(tool_args);
                 json resp;
                 resp["jsonrpc"] = "2.0";
                 resp["id"] = json::parse(id);

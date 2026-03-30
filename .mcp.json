@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "bolt": {
+      "command": "/home/ubuntu/Bolt/build/bolt",
+      "args": ["mcp-server"]
+    }
+  }
+}
