@@ -16,6 +16,7 @@ public:
 
     std::string name() const override;
     std::string description() const override;
+    ToolSchema schema() const override;
     ToolPreview preview(const std::string& args) const override;
     ToolResult run(const std::string& args) const override;
 

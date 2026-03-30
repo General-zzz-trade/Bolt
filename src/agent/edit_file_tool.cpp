@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include "workspace_utils.h"
 
 namespace {
@@ -194,7 +195,90 @@ void parse_line_range_header(const std::string& header,
     }
 }
 
+EditFileRequest parse_json_edit_request(const nlohmann::json& j) {
+    EditFileRequest request;
+    request.path = j.value("path", "");
+    if (request.path.empty()) {
+        throw std::runtime_error("edit_file JSON args must include 'path'");
+    }
+
+    request.mode = EditOperationType::exact_replace;
+
+    // Support single replacement: {"path":"...", "old":"...", "new":"..."}
+    if (j.contains("old") && j.contains("new")) {
+        EditOperation op;
+        op.type = EditOperationType::exact_replace;
+        op.old_text = j["old"].get<std::string>();
+        op.new_text = j["new"].get<std::string>();
+        if (op.old_text.empty()) {
+            throw std::runtime_error("edit_file 'old' must not be empty");
+        }
+        request.operations.push_back(std::move(op));
+        return request;
+    }
+
+    // Support old_text/new_text aliases
+    if (j.contains("old_text") && j.contains("new_text")) {
+        EditOperation op;
+        op.type = EditOperationType::exact_replace;
+        op.old_text = j["old_text"].get<std::string>();
+        op.new_text = j["new_text"].get<std::string>();
+        if (op.old_text.empty()) {
+            throw std::runtime_error("edit_file 'old_text' must not be empty");
+        }
+        request.operations.push_back(std::move(op));
+        return request;
+    }
+
+    // Support array of replacements: {"path":"...", "edits": [{"old":"...", "new":"..."}, ...]}
+    if (j.contains("edits") && j["edits"].is_array()) {
+        for (const auto& edit : j["edits"]) {
+            EditOperation op;
+            op.type = EditOperationType::exact_replace;
+            op.old_text = edit.value("old", edit.value("old_text", ""));
+            op.new_text = edit.value("new", edit.value("new_text", ""));
+            if (op.old_text.empty()) {
+                throw std::runtime_error("edit_file edit entry 'old' must not be empty");
+            }
+            request.operations.push_back(std::move(op));
+        }
+        if (request.operations.empty()) {
+            throw std::runtime_error("edit_file 'edits' array must not be empty");
+        }
+        return request;
+    }
+
+    // Support line replacement: {"path":"...", "start_line":5, "end_line":10, "content":"..."}
+    if (j.contains("start_line") && j.contains("content")) {
+        request.mode = EditOperationType::line_replace;
+        EditOperation op;
+        op.type = EditOperationType::line_replace;
+        op.start_line = j["start_line"].get<std::size_t>();
+        op.end_line = j.value("end_line", op.start_line);
+        op.new_text = j["content"].get<std::string>();
+        request.operations.push_back(std::move(op));
+        return request;
+    }
+
+    throw std::runtime_error("edit_file JSON args must include 'old'+'new', 'old_text'+'new_text', 'edits' array, or 'start_line'+'content'");
+}
+
 EditFileRequest parse_edit_request(const std::string& raw_args) {
+    // Try JSON format first (from function calling models)
+    {
+        std::string trimmed = raw_args;
+        auto b = trimmed.find_first_not_of(" \t\r\n");
+        if (b != std::string::npos) trimmed = trimmed.substr(b);
+        if (!trimmed.empty() && trimmed[0] == '{') {
+            try {
+                auto j = nlohmann::json::parse(trimmed);
+                return parse_json_edit_request(j);
+            } catch (const nlohmann::json::parse_error&) {
+                // Not valid JSON, fall through to legacy format
+            }
+        }
+    }
+
     std::string args = normalize_newlines(raw_args);
     if (args.find("old<<<") == std::string::npos &&
         args.find("replace_lines=") == std::string::npos &&
@@ -622,7 +706,17 @@ std::string EditFileTool::name() const {
 }
 
 std::string EditFileTool::description() const {
-    return "Replace one or more exact text blocks, or patch one or more line ranges, inside a workspace file.";
+    return "Replace exact text in a workspace file. Provide path, old (text to find), and new (replacement text).";
+}
+
+ToolSchema EditFileTool::schema() const {
+    ToolSchema s;
+    s.name = "edit_file";
+    s.description = description();
+    s.parameters.push_back({"path", "string", "Relative file path to edit", true});
+    s.parameters.push_back({"old", "string", "Exact text to find and replace (must match file content exactly)", true});
+    s.parameters.push_back({"new", "string", "Replacement text", true});
+    return s;
 }
 
 ToolPreview EditFileTool::preview(const std::string& args) const {

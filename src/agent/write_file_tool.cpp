@@ -4,6 +4,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include <nlohmann/json.hpp>
 #include "workspace_utils.h"
 
 namespace {
@@ -60,6 +61,25 @@ std::string decode_escaped_newlines(const std::string& value) {
 }
 
 WriteFileRequest parse_write_request(const std::string& raw_args) {
+    // Try JSON format first: {"path": "file.py", "content": "..."}
+    {
+        std::string trimmed = raw_args;
+        auto b = trimmed.find_first_not_of(" \t\r\n");
+        if (b != std::string::npos) trimmed = trimmed.substr(b);
+        if (!trimmed.empty() && trimmed[0] == '{') {
+            try {
+                auto j = nlohmann::json::parse(trimmed);
+                std::string path = j.value("path", "");
+                std::string content = j.value("content", "");
+                if (!path.empty()) {
+                    return {path, content};
+                }
+            } catch (const nlohmann::json::parse_error&) {
+                // Not valid JSON, fall through
+            }
+        }
+    }
+
     std::string args = normalize_newlines(raw_args);
     if (args.find("\ncontent<<<") == std::string::npos && args.find("\\n") != std::string::npos) {
         args = decode_escaped_newlines(args);
@@ -146,7 +166,16 @@ std::string WriteFileTool::name() const {
 }
 
 std::string WriteFileTool::description() const {
-    return "Write a text file inside the workspace. Args format: path=<relative path> then content<<< ... >>>";
+    return "Create or overwrite a file in the workspace. Provide path and content.";
+}
+
+ToolSchema WriteFileTool::schema() const {
+    ToolSchema s;
+    s.name = "write_file";
+    s.description = description();
+    s.parameters.push_back({"path", "string", "Relative file path to create/overwrite", true});
+    s.parameters.push_back({"content", "string", "File content to write", true});
+    return s;
 }
 
 ToolPreview WriteFileTool::preview(const std::string& args) const {

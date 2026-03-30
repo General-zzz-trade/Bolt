@@ -787,46 +787,28 @@ std::string Agent::run_turn_structured(const std::string& user_input,
             action.risk = "low";
             action.requires_confirmation = false;
 
-            // Parse structured arguments back to the string format tools expect.
-            // Models may send {"args": "value"} or {"path": "value"} etc.
-            // Simple tools (read_file, list_dir) expect bare string args.
-            // Complex tools (edit_file, write_file) expect key=value format.
+            // Parse structured arguments from function calling JSON.
+            // Tools that accept JSON directly (edit_file, write_file) get raw JSON.
+            // Simple tools (read_file, list_dir) get the first string value.
             try {
                 auto j = nlohmann::json::parse(tool_call.arguments);
-                if (j.contains("args")) {
-                    // Explicit "args" field — use as-is
+
+                // Tools with JSON-native parsers: pass raw JSON directly
+                if (action.tool_name == "edit_file" || action.tool_name == "write_file") {
+                    action.args = tool_call.arguments;
+                } else if (j.contains("args")) {
                     action.args = j["args"].get<std::string>();
                 } else if (j.size() == 1 && j.begin()->is_string()) {
-                    // Single string parameter (e.g. {"path": "src/main.cpp"})
-                    // For simple tools, just use the value directly
                     action.args = j.begin()->get<std::string>();
+                } else if (j.contains("command") && j["command"].is_string()) {
+                    action.args = j["command"].get<std::string>();
+                } else if (j.contains("query") && j["query"].is_string()) {
+                    action.args = j["query"].get<std::string>();
+                } else if (j.contains("path") && j["path"].is_string() && j.size() == 1) {
+                    action.args = j["path"].get<std::string>();
                 } else {
-                    // Multiple parameters — serialize as key=value lines.
-                    // IMPORTANT: "path" must come first for write_file/edit_file.
-                    std::ostringstream args_str;
-
-                    // Emit "path" first if present
-                    if (j.contains("path") && j["path"].is_string()) {
-                        args_str << "path=" << j["path"].get<std::string>() << "\n";
-                    }
-
-                    // Emit remaining params, using content<<< >>> for file content
-                    for (auto it = j.begin(); it != j.end(); ++it) {
-                        if (it.key() == "path") continue;  // already emitted
-
-                        if (it.key() == "content" && it->is_string()) {
-                            // Use the content<<< >>> format for write_file
-                            args_str << "content<<<\n" << it->get<std::string>() << "\n>>>\n";
-                        } else if (it->is_string()) {
-                            args_str << it.key() << "=" << it->get<std::string>() << "\n";
-                        } else {
-                            args_str << it.key() << "=" << it->dump() << "\n";
-                        }
-                    }
-                    action.args = args_str.str();
-                    if (!action.args.empty() && action.args.back() == '\n') {
-                        action.args.pop_back();
-                    }
+                    // Fallback: pass raw JSON, let tool parse it
+                    action.args = tool_call.arguments;
                 }
             } catch (...) {
                 action.args = tool_call.arguments;
