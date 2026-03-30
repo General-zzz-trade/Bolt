@@ -363,6 +363,20 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
                     result.provider = "openai";
                 } else if (model_name.find("gemini") != std::string::npos) {
                     result.provider = "gemini";
+                } else if (model_name.find("deepseek") != std::string::npos) {
+                    result.provider = "deepseek";
+                } else if (model_name.find("qwen-") != std::string::npos ||
+                           model_name.find("qwen3-") != std::string::npos) {
+                    result.provider = "qwen";
+                } else if (model_name.find("glm") != std::string::npos) {
+                    result.provider = "zhipu";
+                } else if (model_name.find("moonshot") != std::string::npos) {
+                    result.provider = "moonshot";
+                } else if (model_name.find("Baichuan") != std::string::npos ||
+                           model_name.find("baichuan") != std::string::npos) {
+                    result.provider = "baichuan";
+                } else if (model_name.find("doubao") != std::string::npos) {
+                    result.provider = "doubao";
                 } else if (model_name.find("llama") != std::string::npos ||
                            model_name.find("mixtral") != std::string::npos) {
                     if (std::getenv("GROQ_API_KEY")) {

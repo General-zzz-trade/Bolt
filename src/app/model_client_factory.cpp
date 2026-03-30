@@ -76,6 +76,84 @@ std::unique_ptr<IModelClient> create_model_client(
         return std::make_unique<OpenAiClient>(std::move(groq_config), transport);
     }
 
+    if (provider == "deepseek") {
+        OpenAiConfig cfg;
+        cfg.base_url = config.deepseek_base_url;
+        cfg.api_key = get_env("DEEPSEEK_API_KEY");
+        cfg.model = model_override.empty() ? config.deepseek_model : model_override;
+
+        if (cfg.api_key.empty()) {
+            throw std::runtime_error("DEEPSEEK_API_KEY environment variable is required for provider=deepseek");
+        }
+
+        return std::make_unique<OpenAiClient>(std::move(cfg), transport);
+    }
+
+    if (provider == "qwen") {
+        OpenAiConfig cfg;
+        cfg.base_url = config.qwen_base_url;
+        cfg.api_key = get_env("DASHSCOPE_API_KEY");
+        cfg.model = model_override.empty() ? config.qwen_model : model_override;
+
+        if (cfg.api_key.empty()) {
+            throw std::runtime_error("DASHSCOPE_API_KEY environment variable is required for provider=qwen");
+        }
+
+        return std::make_unique<OpenAiClient>(std::move(cfg), transport);
+    }
+
+    if (provider == "zhipu") {
+        OpenAiConfig cfg;
+        cfg.base_url = config.zhipu_base_url;
+        cfg.api_key = get_env("ZHIPU_API_KEY");
+        cfg.model = model_override.empty() ? config.zhipu_model : model_override;
+
+        if (cfg.api_key.empty()) {
+            throw std::runtime_error("ZHIPU_API_KEY environment variable is required for provider=zhipu");
+        }
+
+        return std::make_unique<OpenAiClient>(std::move(cfg), transport);
+    }
+
+    if (provider == "moonshot") {
+        OpenAiConfig cfg;
+        cfg.base_url = config.moonshot_base_url;
+        cfg.api_key = get_env("MOONSHOT_API_KEY");
+        cfg.model = model_override.empty() ? config.moonshot_model : model_override;
+
+        if (cfg.api_key.empty()) {
+            throw std::runtime_error("MOONSHOT_API_KEY environment variable is required for provider=moonshot");
+        }
+
+        return std::make_unique<OpenAiClient>(std::move(cfg), transport);
+    }
+
+    if (provider == "baichuan") {
+        OpenAiConfig cfg;
+        cfg.base_url = config.baichuan_base_url;
+        cfg.api_key = get_env("BAICHUAN_API_KEY");
+        cfg.model = model_override.empty() ? config.baichuan_model : model_override;
+
+        if (cfg.api_key.empty()) {
+            throw std::runtime_error("BAICHUAN_API_KEY environment variable is required for provider=baichuan");
+        }
+
+        return std::make_unique<OpenAiClient>(std::move(cfg), transport);
+    }
+
+    if (provider == "doubao") {
+        OpenAiConfig cfg;
+        cfg.base_url = config.doubao_base_url;
+        cfg.api_key = get_env("VOLC_API_KEY");
+        cfg.model = model_override.empty() ? config.doubao_model : model_override;
+
+        if (cfg.api_key.empty()) {
+            throw std::runtime_error("VOLC_API_KEY environment variable is required for provider=doubao");
+        }
+
+        return std::make_unique<OpenAiClient>(std::move(cfg), transport);
+    }
+
     if (provider == "ollama-chat") {
         const std::string model = model_override.empty() ? config.default_model : model_override;
         return std::make_unique<OllamaChatClient>(model, config.ollama, transport);

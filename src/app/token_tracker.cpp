@@ -32,6 +32,32 @@ int TokenTracker::turn_count() const {
 }
 
 double TokenTracker::input_price_per_mtok(const std::string& model) {
+    // DeepSeek
+    if (model.find("deepseek-chat") != std::string::npos) return 0.27;
+    if (model.find("deepseek-reasoner") != std::string::npos) return 0.55;
+
+    // Qwen cloud models (no colon = cloud API, with colon = local Ollama)
+    if (model.find("qwen") != std::string::npos && model.find(':') == std::string::npos) {
+        if (model.find("qwen-turbo") != std::string::npos) return 0.30;
+        if (model.find("qwen-max") != std::string::npos) return 2.00;
+        return 0.80;  // qwen-plus, qwen3-235b-a22b, etc.
+    }
+
+    // Zhipu GLM
+    if (model.find("glm-4-flash") != std::string::npos) return 0.00;
+    if (model.find("glm-4") != std::string::npos) return 1.40;
+
+    // Moonshot
+    if (model.find("moonshot") != std::string::npos) return 1.20;
+
+    // Baichuan
+    if (model.find("Baichuan") != std::string::npos ||
+        model.find("baichuan") != std::string::npos) return 1.00;
+
+    // Doubao
+    if (model.find("doubao-lite") != std::string::npos) return 0.04;
+    if (model.find("doubao") != std::string::npos) return 0.40;
+
     // Local/free models
     if (model.find("ollama") != std::string::npos ||
         model.find("llama") != std::string::npos ||
@@ -82,6 +108,32 @@ double TokenTracker::input_price_per_mtok(const std::string& model) {
 }
 
 double TokenTracker::output_price_per_mtok(const std::string& model) {
+    // DeepSeek
+    if (model.find("deepseek-chat") != std::string::npos) return 1.10;
+    if (model.find("deepseek-reasoner") != std::string::npos) return 2.19;
+
+    // Qwen cloud models (no colon = cloud API, with colon = local Ollama)
+    if (model.find("qwen") != std::string::npos && model.find(':') == std::string::npos) {
+        if (model.find("qwen-turbo") != std::string::npos) return 0.60;
+        if (model.find("qwen-max") != std::string::npos) return 6.00;
+        return 2.00;  // qwen-plus, qwen3-235b-a22b, etc.
+    }
+
+    // Zhipu GLM
+    if (model.find("glm-4-flash") != std::string::npos) return 0.00;
+    if (model.find("glm-4") != std::string::npos) return 1.40;
+
+    // Moonshot
+    if (model.find("moonshot") != std::string::npos) return 1.20;
+
+    // Baichuan
+    if (model.find("Baichuan") != std::string::npos ||
+        model.find("baichuan") != std::string::npos) return 1.00;
+
+    // Doubao
+    if (model.find("doubao-lite") != std::string::npos) return 0.04;
+    if (model.find("doubao") != std::string::npos) return 0.40;
+
     // Local/free models
     if (model.find("ollama") != std::string::npos ||
         model.find("llama") != std::string::npos ||

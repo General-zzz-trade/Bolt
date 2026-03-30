@@ -138,6 +138,54 @@ void apply_config_entry(AppConfig* config, const std::string& key, const std::st
         config->groq_model = value;
         return;
     }
+    if (key == "deepseek.base_url") {
+        config->deepseek_base_url = value;
+        return;
+    }
+    if (key == "deepseek.model") {
+        config->deepseek_model = value;
+        return;
+    }
+    if (key == "qwen.base_url") {
+        config->qwen_base_url = value;
+        return;
+    }
+    if (key == "qwen.model") {
+        config->qwen_model = value;
+        return;
+    }
+    if (key == "zhipu.base_url") {
+        config->zhipu_base_url = value;
+        return;
+    }
+    if (key == "zhipu.model") {
+        config->zhipu_model = value;
+        return;
+    }
+    if (key == "moonshot.base_url") {
+        config->moonshot_base_url = value;
+        return;
+    }
+    if (key == "moonshot.model") {
+        config->moonshot_model = value;
+        return;
+    }
+    if (key == "baichuan.base_url") {
+        config->baichuan_base_url = value;
+        return;
+    }
+    if (key == "baichuan.model") {
+        config->baichuan_model = value;
+        return;
+    }
+    if (key == "doubao.base_url") {
+        config->doubao_base_url = value;
+        return;
+    }
+    if (key == "doubao.model") {
+        config->doubao_model = value;
+        return;
+    }
     if (key == "router.fast_provider") {
         config->router_fast_provider = value;
         return;
@@ -328,6 +376,18 @@ void load_environment_overrides(AppConfig* config) {
     apply_env_override(config, "BOLT_GEMINI_MODEL", "gemini.model");
     apply_env_override(config, "BOLT_GROQ_BASE_URL", "groq.base_url");
     apply_env_override(config, "BOLT_GROQ_MODEL", "groq.model");
+    apply_env_override(config, "BOLT_DEEPSEEK_BASE_URL", "deepseek.base_url");
+    apply_env_override(config, "BOLT_DEEPSEEK_MODEL", "deepseek.model");
+    apply_env_override(config, "BOLT_QWEN_BASE_URL", "qwen.base_url");
+    apply_env_override(config, "BOLT_QWEN_MODEL", "qwen.model");
+    apply_env_override(config, "BOLT_ZHIPU_BASE_URL", "zhipu.base_url");
+    apply_env_override(config, "BOLT_ZHIPU_MODEL", "zhipu.model");
+    apply_env_override(config, "BOLT_MOONSHOT_BASE_URL", "moonshot.base_url");
+    apply_env_override(config, "BOLT_MOONSHOT_MODEL", "moonshot.model");
+    apply_env_override(config, "BOLT_BAICHUAN_BASE_URL", "baichuan.base_url");
+    apply_env_override(config, "BOLT_BAICHUAN_MODEL", "baichuan.model");
+    apply_env_override(config, "BOLT_DOUBAO_BASE_URL", "doubao.base_url");
+    apply_env_override(config, "BOLT_DOUBAO_MODEL", "doubao.model");
     apply_env_override(config, "BOLT_ROUTER_FAST_PROVIDER", "router.fast_provider");
     apply_env_override(config, "BOLT_ROUTER_STRONG_PROVIDER", "router.strong_provider");
     apply_env_override(config, "BOLT_OLLAMA_HOST", "ollama.host");

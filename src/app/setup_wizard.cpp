@@ -79,6 +79,34 @@ std::vector<ProviderInfo> get_providers() {
             {"llama-3.1-8b-instant", "Fastest"},
             {"mixtral-8x7b-32768", "Good balance"},
         }},
+        {"deepseek", "DeepSeek", "DeepSeek-V3, R1 reasoning (requires DEEPSEEK_API_KEY)", "DEEPSEEK_API_KEY", {
+            {"deepseek-chat", "V3 — best balance"},
+            {"deepseek-reasoner", "R1 — reasoning model"},
+        }},
+        {"qwen", "Qwen", "Alibaba Qwen models (requires DASHSCOPE_API_KEY)", "DASHSCOPE_API_KEY", {
+            {"qwen-plus", "Good balance"},
+            {"qwen-max", "Most capable"},
+            {"qwen-turbo", "Fastest, cheapest"},
+            {"qwen3-235b-a22b", "Latest Qwen 3"},
+        }},
+        {"zhipu", "GLM", "Zhipu GLM-4 models (requires ZHIPU_API_KEY)", "ZHIPU_API_KEY", {
+            {"glm-4-flash", "Free tier, fast"},
+            {"glm-4-plus", "Most capable"},
+            {"glm-4-long", "200K context"},
+        }},
+        {"moonshot", "Moonshot (Kimi)", "Moonshot models (requires MOONSHOT_API_KEY)", "MOONSHOT_API_KEY", {
+            {"moonshot-v1-8k", "Fast, 8K context"},
+            {"moonshot-v1-32k", "32K context"},
+            {"moonshot-v1-128k", "128K long context"},
+        }},
+        {"baichuan", "Baichuan", "Baichuan models (requires BAICHUAN_API_KEY)", "BAICHUAN_API_KEY", {
+            {"Baichuan4", "Latest, most capable"},
+            {"Baichuan3-Turbo", "Fast"},
+        }},
+        {"doubao", "Doubao", "ByteDance VolcEngine (requires VOLC_API_KEY)", "VOLC_API_KEY", {
+            {"doubao-pro-32k", "Pro, 32K context"},
+            {"doubao-lite-32k", "Lite, very cheap"},
+        }},
     };
 }
 
@@ -381,6 +409,18 @@ void apply_result_to_config(AppConfig& config, const std::string& provider,
         config.gemini_model = model;
     } else if (provider == "groq") {
         config.groq_model = model;
+    } else if (provider == "deepseek") {
+        config.deepseek_model = model;
+    } else if (provider == "qwen") {
+        config.qwen_model = model;
+    } else if (provider == "zhipu") {
+        config.zhipu_model = model;
+    } else if (provider == "moonshot") {
+        config.moonshot_model = model;
+    } else if (provider == "baichuan") {
+        config.baichuan_model = model;
+    } else if (provider == "doubao") {
+        config.doubao_model = model;
     }
 }
 
