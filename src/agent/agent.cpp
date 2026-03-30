@@ -95,7 +95,8 @@ Agent::Agent(std::unique_ptr<IModelClient> client,
       debug_(debug),
       failure_tracker_(runtime_config_.max_consecutive_failures),
       thread_pool_(std::max(2u, std::thread::hardware_concurrency())),
-      prefetch_cache_(thread_pool_) {
+      prefetch_cache_(thread_pool_),
+      speculative_executor_(tools_, thread_pool_) {
     if (client_ == nullptr) {
         throw std::invalid_argument("Agent requires a model client");
     }
@@ -625,6 +626,7 @@ std::string Agent::run_turn_structured(const std::string& user_input,
     last_execution_trace_.clear();
     notify_trace_updated();
     auto_verify_count_ = 0;
+    speculative_executor_.reset();
     push_history({"user", user_input, ""});
 
     TaskRunner task_runner(
@@ -661,6 +663,8 @@ std::string Agent::run_turn_structured(const std::string& user_input,
                     accumulated += token;
                     // Speculative prefetch: analyze partial tokens for file paths
                     prefetch_cache_.on_streaming_token(accumulated, workspace_root_);
+                    // Speculative execution: detect tool calls early and start running
+                    speculative_executor_.on_token(accumulated);
                     // Forward token to caller (SSE passthrough)
                     if (on_token) on_token(token);
                     // Check cancellation
@@ -761,10 +765,48 @@ std::string Agent::run_turn_structured(const std::string& user_input,
         }
         notify_trace_updated();
 
-        // Execute ALL tool calls in parallel via execute_batch()
+        // Check speculative execution cache for read-only tools.
+        // For any tool that was speculatively executed during streaming,
+        // substitute the pre-computed result to avoid redundant work.
+        std::vector<Action> remaining_actions;
+        std::vector<std::size_t> remaining_indices;
+        std::vector<TaskStepResult> results(actions.size());
+        std::vector<bool> resolved(actions.size(), false);
+
+        for (std::size_t i = 0; i < actions.size(); ++i) {
+            const Tool* tool = tools_.find(actions[i].tool_name);
+            if (tool && tool->is_read_only()) {
+                std::string spec_result =
+                    speculative_executor_.wait_result(actions[i].tool_name, actions[i].args, 100);
+                if (!spec_result.empty()) {
+                    log_debug("Speculative Hit",
+                              actions[i].tool_name + " result was pre-computed");
+                    TaskStepResult& r = results[i];
+                    r.step.index = trace_base + i + 1;
+                    r.step.tool_name = actions[i].tool_name;
+                    r.step.args = actions[i].args;
+                    r.step.reason = actions[i].reason;
+                    r.step.risk = actions[i].risk;
+                    r.step.status = ExecutionStepStatus::completed;
+                    r.step.detail = spec_result;
+                    r.observation = {true, "tool", spec_result};
+                    resolved[i] = true;
+                    continue;
+                }
+            }
+            remaining_actions.push_back(actions[i]);
+            remaining_indices.push_back(i);
+        }
+
+        // Execute remaining tool calls via execute_batch()
         // (read-only tools run concurrently, write tools run sequentially)
-        const std::vector<TaskStepResult> results =
-            task_runner.execute_batch(actions, trace_base + 1);
+        if (!remaining_actions.empty()) {
+            const std::vector<TaskStepResult> batch_results =
+                task_runner.execute_batch(remaining_actions, trace_base + 1);
+            for (std::size_t j = 0; j < batch_results.size(); ++j) {
+                results[remaining_indices[j]] = batch_results[j];
+            }
+        }
 
         // Process results and update history
         bool should_return = false;

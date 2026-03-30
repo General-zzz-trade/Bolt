@@ -38,6 +38,7 @@
 #include "../src/core/indexing/file_index.h"
 #include "../src/core/indexing/file_prefetch.h"
 #include "../src/core/net/sse_parser.h"
+#include "../src/agent/speculative_executor.h"
 
 using json = nlohmann::json;
 
@@ -640,6 +641,132 @@ void test_prefetch_path_detection() {
 }
 
 // ============================================================
+// 8b. SPECULATIVE EXECUTOR TESTS
+// ============================================================
+
+// A simple read-only tool for testing speculative execution.
+class EchoReadOnlyTool : public Tool {
+public:
+    std::string name() const override { return "echo_ro"; }
+    std::string description() const override { return "Echoes input (read-only)"; }
+    ToolResult run(const std::string& args) const override {
+        return {true, "echo:" + args};
+    }
+    bool is_read_only() const override { return true; }
+};
+
+// A write tool that should never be speculatively executed.
+class WriteOnlyTool : public Tool {
+public:
+    std::string name() const override { return "write_tool"; }
+    std::string description() const override { return "Write tool (not read-only)"; }
+    ToolResult run(const std::string& args) const override {
+        return {true, "written:" + args};
+    }
+    bool is_read_only() const override { return false; }
+};
+
+void test_speculative_executor_detects_and_runs() {
+    ThreadPool pool(2);
+    ToolRegistry registry;
+    registry.register_tool(std::make_unique<EchoReadOnlyTool>());
+
+    SpeculativeExecutor spec(registry, pool);
+
+    // Simulate streaming tokens containing a structured tool call
+    std::string accumulated =
+        R"({"name": "echo_ro", "arguments": "{\"args\": \"hello world\"}"})";
+    // Pad to exceed 100-char threshold
+    accumulated += std::string(100, ' ');
+    spec.on_token(accumulated);
+
+    // Wait for the speculative result
+    std::string result = spec.wait_result("echo_ro", "hello world", 2000);
+    expect_equal("echo:hello world", result, "speculative result matches");
+    expect_true(spec.hits() == 1, "speculative hit counted");
+}
+
+void test_speculative_executor_ignores_write_tools() {
+    ThreadPool pool(2);
+    ToolRegistry registry;
+    registry.register_tool(std::make_unique<WriteOnlyTool>());
+
+    SpeculativeExecutor spec(registry, pool);
+
+    std::string accumulated =
+        R"({"name": "write_tool", "arguments": "{\"data\": \"danger\"}"})";
+    accumulated += std::string(100, ' ');
+    spec.on_token(accumulated);
+
+    // Write tools should not be speculated
+    std::string result = spec.wait_result("write_tool", "danger", 200);
+    expect_true(result.empty(), "write tool not speculatively run");
+    expect_true(spec.misses() == 1, "speculative miss counted");
+}
+
+void test_speculative_executor_reset_clears_state() {
+    ThreadPool pool(2);
+    ToolRegistry registry;
+    registry.register_tool(std::make_unique<EchoReadOnlyTool>());
+
+    SpeculativeExecutor spec(registry, pool);
+
+    std::string accumulated =
+        R"({"name": "echo_ro", "arguments": "{\"args\": \"test\"}"})";
+    accumulated += std::string(100, ' ');
+    spec.on_token(accumulated);
+
+    std::string result = spec.wait_result("echo_ro", "test", 2000);
+    expect_true(!result.empty(), "result available before reset");
+
+    spec.reset();
+
+    result = spec.wait_result("echo_ro", "test", 100);
+    expect_true(result.empty(), "result cleared after reset");
+}
+
+void test_speculative_executor_direct_json_args() {
+    ThreadPool pool(2);
+    ToolRegistry registry;
+    registry.register_tool(std::make_unique<EchoReadOnlyTool>());
+
+    SpeculativeExecutor spec(registry, pool);
+
+    // Test with direct JSON object arguments (not string-escaped)
+    std::string accumulated =
+        R"({"name": "echo_ro", "arguments": {"args": "direct json"}})";
+    accumulated += std::string(100, ' ');
+    spec.on_token(accumulated);
+
+    std::string result = spec.wait_result("echo_ro", "direct json", 2000);
+    expect_equal("echo:direct json", result, "direct JSON args parsed correctly");
+}
+
+void test_speculative_executor_no_duplicate_submissions() {
+    ThreadPool pool(2);
+    ToolRegistry registry;
+    registry.register_tool(std::make_unique<EchoReadOnlyTool>());
+
+    SpeculativeExecutor spec(registry, pool);
+
+    std::string accumulated =
+        R"({"name": "echo_ro", "arguments": "{\"args\": \"dedup\"}"})";
+    accumulated += std::string(100, ' ');
+
+    // Call on_token multiple times with same content (but growing by 100+ chars)
+    spec.on_token(accumulated);
+    accumulated += std::string(100, ' ');
+    spec.on_token(accumulated);
+    accumulated += std::string(100, ' ');
+    spec.on_token(accumulated);
+
+    std::string result = spec.wait_result("echo_ro", "dedup", 2000);
+    expect_equal("echo:dedup", result, "dedup result correct");
+    // Only 1 hit (not 3 submissions)
+    expect_true(spec.hits() == 1, "exactly one hit after dedup");
+}
+
+// ============================================================
 // 9. SSE PARSER TESTS
 // ============================================================
 
@@ -1087,6 +1214,13 @@ int main() {
         {"[PREFETCH] warm and get", test_prefetch_cache_warm_and_get},
         {"[PREFETCH] cache miss returns empty", test_prefetch_cache_miss},
         {"[PREFETCH] detects file paths in tokens", test_prefetch_path_detection},
+
+        // 8b. Speculative executor
+        {"[SPEC] detects and runs read-only tools", test_speculative_executor_detects_and_runs},
+        {"[SPEC] ignores write tools", test_speculative_executor_ignores_write_tools},
+        {"[SPEC] reset clears state", test_speculative_executor_reset_clears_state},
+        {"[SPEC] direct JSON object args", test_speculative_executor_direct_json_args},
+        {"[SPEC] no duplicate submissions", test_speculative_executor_no_duplicate_submissions},
 
         // 9. SSE parser
         {"[SSE] parses single event", test_sse_parser_basic},

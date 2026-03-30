@@ -32,6 +32,7 @@
 #include "task_runner.h"
 #include "tool_set_factory.h"
 #include "tool_registry.h"
+#include "speculative_executor.h"
 
 class Agent {
 public:
@@ -66,6 +67,9 @@ public:
 
     /// Access to the prefetch cache for tools that read files.
     FilePrefetchCache& prefetch_cache() { return prefetch_cache_; }
+
+    /// Access to the speculative executor for pre-computed tool results.
+    SpeculativeExecutor& speculative_executor() { return speculative_executor_; }
 
     /// Access to memory stores for persistent cross-session memory.
     MemoryStore& global_memory() { return global_memory_; }
@@ -105,6 +109,7 @@ private:
     ThreadPool thread_pool_;
     FileIndex file_index_;
     FilePrefetchCache prefetch_cache_;
+    SpeculativeExecutor speculative_executor_;
     PromptCompressor prompt_compressor_;
     ToolResultCache tool_result_cache_;
     MemoryStore global_memory_;
