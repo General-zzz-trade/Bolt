@@ -657,7 +657,11 @@ std::vector<ChatMessage> Agent::build_chat_messages() const {
         if (msg.role == "user") {
             messages.push_back({ChatRole::user, msg.content});
         } else if (msg.role == "assistant") {
-            messages.push_back({ChatRole::assistant, msg.content});
+            ChatMessage am;
+            am.role = ChatRole::assistant;
+            am.content = msg.content;
+            am.tool_calls = msg.tool_calls;  // Restore tool_calls for tool_call_id matching
+            messages.push_back(std::move(am));
         } else if (msg.role == "tool") {
             ChatMessage tool_msg;
             tool_msg.role = ChatRole::tool;
@@ -767,12 +771,10 @@ std::string Agent::run_turn_structured(const std::string& user_input,
         }
 
         // Store assistant message with tool calls in history for context
-        // (Simplified: store the text content as the assistant turn)
         Message assistant_msg;
         assistant_msg.role = "assistant";
         assistant_msg.content = response.content;
-        // We need to track tool_calls for the next message's tool_call_id
-        // Store as a special history entry
+        assistant_msg.tool_calls = response.tool_calls;  // Preserve for tool_call_id matching
         push_history(std::move(assistant_msg));
 
         // Build actions for ALL tool calls in this response
