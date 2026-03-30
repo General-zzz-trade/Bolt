@@ -2,11 +2,21 @@
 # Usage: iwr -useb https://raw.githubusercontent.com/General-zzz-trade/Bolt/master/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-$Version = "0.5.0"
 $Repo = "General-zzz-trade/Bolt"
 $BinaryName = "bolt-windows-x64.exe"
 $InstallDir = "$env:LOCALAPPDATA\Bolt"
 $BoltPath = "$InstallDir\bolt.exe"
+
+# Auto-detect latest release version
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'
+    $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing 2>$null
+    $Version = $Release.tag_name -replace '^v', ''
+    $ProgressPreference = 'Continue'
+} catch {
+    $Version = "0.6.0"  # Fallback
+}
 
 Write-Host ""
 Write-Host "  ⚡ Bolt Agent Installer" -ForegroundColor Cyan -NoNewline

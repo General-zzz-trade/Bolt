@@ -3,9 +3,14 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/General-zzz-trade/Bolt/master/install.sh | bash
 set -e
 
-VERSION="0.5.0"
 REPO="General-zzz-trade/Bolt"
 INSTALL_DIR="/usr/local/bin"
+
+# Auto-detect latest release version
+VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')
+if [ -z "$VERSION" ]; then
+    VERSION="0.6.0"  # Fallback
+fi
 
 # Colors
 RED='\033[0;31m'
