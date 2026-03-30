@@ -19,3 +19,4 @@ Desktop.ini
 .DS_Store
 build_perf/
 mini_nn_cpp.conf
+bolt-ui/src-tauri/target/
