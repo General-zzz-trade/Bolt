@@ -70,6 +70,7 @@ jobs:
   # Job 2: Build Tauri desktop app for all platforms
   build-desktop:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -98,11 +99,11 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: bolt-ui
-        run: npm install
+        run: npm ci
 
       - name: Build Tauri app
         working-directory: bolt-ui
-        run: npx tauri build
+        run: npx @tauri-apps/cli build
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'
@@ -131,7 +132,8 @@ jobs:
 
   # Job 3: Create GitHub Release with all artifacts
   create-release:
-    needs: [build-cli, build-desktop]
+    needs: [build-cli]
+    if: always() && needs.build-cli.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
