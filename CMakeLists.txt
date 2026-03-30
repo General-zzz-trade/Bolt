@@ -48,6 +48,7 @@ add_library(bolt_core STATIC
         src/agent/plugin_loader.cpp
         src/agent/read_file_tool.cpp
         src/agent/run_command_tool.cpp
+        src/agent/skill_loader.cpp
         src/agent/search_code_tool.cpp
         src/agent/swarm_coordinator.cpp
         src/agent/task_planner_tool.cpp
@@ -124,6 +125,8 @@ add_executable(bolt
         src/matrix.cpp
         src/demo/training_demo.cpp
         src/app/benchmark_runner.cpp
+        src/app/api_server.cpp
+        src/app/telegram_gateway.cpp
         src/app/web_chat_server.cpp
 )
 if (WIN32)

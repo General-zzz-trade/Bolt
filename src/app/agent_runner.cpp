@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include "../agent/agent.h"
+#include "../agent/skill_loader.h"
 #include "../core/session/session_store.h"
 #include "setup_wizard.h"
 #include "terminal_renderer.h"
@@ -191,7 +192,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         "/clear", "/compact", "/model", "/cost",
         "/debug", "/save", "/load", "/sessions", "/delete",
         "/export", "/undo", "/diff", "/status", "/reset",
-        "/sandbox", "/plugins", "/memory", "/team"
+        "/sandbox", "/plugins", "/memory", "/team", "/skills"
     };
     term_input.set_slash_commands(slash_commands);
     if (!workspace_root.empty()) {
@@ -312,6 +313,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
             output << "  \033[1m/sandbox\033[0m           Show sandbox status\n";
             output << "\n\033[1;35m System\033[0m\n";
             output << "  \033[1m/plugins\033[0m           List installed plugins\n";
+            output << "  \033[1m/skills\033[0m            List and load skills (.bolt/skills/*.md)\n";
             output << "  \033[1m/team\033[0m \033[2m<tasks>\033[0m      Run parallel tasks on separate git worktrees\n";
             output << "  \033[1m/quit\033[0m              Exit Bolt\n";
             output << "\n\033[1;35m Shortcuts\033[0m\n";
@@ -613,6 +615,57 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
                     output << "\033[2m  (Agent Team execution requires LLM connection for sub-agents.\n";
                     output << "   Worker branches created as bolt-team-* for manual use.)\033[0m\n\n";
                 }
+            }
+            continue;
+        }
+
+        if (line == "/skills" || line.rfind("/skills ", 0) == 0) {
+            auto ws_skills = SkillLoader::discover(workspace_root / ".bolt" / "skills");
+            std::vector<Skill> gl_skills;
+            const char* home_env = std::getenv("HOME");
+            if (home_env) {
+                gl_skills = SkillLoader::discover(
+                    std::filesystem::path(home_env) / ".bolt" / "skills");
+            }
+
+            std::string subcmd = line.size() > 8 ? trim(line.substr(8)) : "";
+
+            if (subcmd.rfind("load ", 0) == 0) {
+                std::string target = trim(subcmd.substr(5));
+                // Search for skill by name in both lists
+                const Skill* found = nullptr;
+                for (const auto& s : ws_skills) {
+                    if (s.name == target) { found = &s; break; }
+                }
+                if (!found) {
+                    for (const auto& s : gl_skills) {
+                        if (s.name == target) { found = &s; break; }
+                    }
+                }
+                if (found) {
+                    // Inject skill content as a user message with context
+                    std::string inject = "[Skill loaded: " + found->name + "]\n" + found->content;
+                    output << "\033[2mLoaded skill: " << found->name << "\033[0m\n";
+                    // Send as a silent user turn so the agent sees the skill content
+                    agent.run_turn(inject);
+                } else {
+                    output << "\033[33mSkill not found: " << target << "\033[0m\n";
+                }
+            } else {
+                output << "\n\033[1;35m Skills\033[0m\n\n";
+                if (!ws_skills.empty()) {
+                    output << "  \033[1mWorkspace (.bolt/skills/):\033[0m\n";
+                    output << SkillLoader::format_list(ws_skills);
+                }
+                if (!gl_skills.empty()) {
+                    output << "  \033[1mGlobal (~/.bolt/skills/):\033[0m\n";
+                    output << SkillLoader::format_list(gl_skills);
+                }
+                if (ws_skills.empty() && gl_skills.empty()) {
+                    output << "  \033[2mNo skills found.\033[0m\n";
+                }
+                output << "\n  \033[2mSkill dirs: .bolt/skills/ and ~/.bolt/skills/\033[0m\n";
+                output << "  \033[2mUsage: /skills load <name>\033[0m\n\n";
             }
             continue;
         }

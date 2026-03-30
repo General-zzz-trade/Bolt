@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "action_parser.h"
+#include "skill_loader.h"
 #include "workspace_prompt.h"
 
 namespace {
@@ -567,6 +568,27 @@ std::vector<ChatMessage> Agent::build_chat_messages() const {
     if (!workspace_prompt.empty()) {
         system_prompt << "\n# Project Instructions\n";
         system_prompt << workspace_prompt << "\n";
+    }
+
+    // Load and inject auto_load skills
+    auto workspace_skills = SkillLoader::discover(workspace_root_ / ".bolt" / "skills");
+    std::vector<Skill> global_skills;
+    {
+        const char* home_env = std::getenv("HOME");
+        if (home_env) {
+            global_skills = SkillLoader::discover(
+                std::filesystem::path(home_env) / ".bolt" / "skills");
+        }
+    }
+    std::string skills_prompt;
+    for (const auto& s : workspace_skills) {
+        if (s.auto_load) skills_prompt += "\n## Skill: " + s.name + "\n" + s.content + "\n";
+    }
+    for (const auto& s : global_skills) {
+        if (s.auto_load) skills_prompt += "\n## Skill: " + s.name + "\n" + s.content + "\n";
+    }
+    if (!skills_prompt.empty()) {
+        system_prompt << "\n# Active Skills\n" << skills_prompt;
     }
 
     // Inject remembered context from memory stores

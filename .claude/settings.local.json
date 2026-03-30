@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xargs wc:*)"
+      "Bash(xargs wc:*)",
+      "Skill(update-config)"
     ]
   }
 }

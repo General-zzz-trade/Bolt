@@ -13,10 +13,13 @@
 #include "app/app_config.h"
 #include "app/agent_runner.h"
 #include "app/setup_wizard.h"
+#include "app/static_approval_provider.h"
 #include "app/benchmark_runner.h"
 #include "core/mcp/mcp_server.h"
 #include "app/program_cli.h"
+#include "app/telegram_gateway.h"
 #include "app/web_approval_provider.h"
+#include "app/api_server.h"
 #include "app/web_chat_cli_options.h"
 #include "app/web_chat_server.h"
 #include "agent/agent.h"
@@ -128,6 +131,74 @@ int run_mcp_server() {
     return server.run(std::cin, std::cout);
 }
 
+int run_telegram(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    const std::filesystem::path workspace_root = std::filesystem::current_path();
+    const AppConfig config = load_app_config(workspace_root);
+
+    // Get bot token from env
+    const char* token_env = std::getenv("TELEGRAM_BOT_TOKEN");
+    if (!token_env || std::string(token_env).empty()) {
+        std::cerr << "Error: TELEGRAM_BOT_TOKEN environment variable is required.\n";
+        std::cerr << "Get a token from @BotFather on Telegram.\n";
+        return 1;
+    }
+
+    AgentCliOptions agent_options;
+    agent_options.model = config.default_model;
+
+    AgentServices services =
+        create_platform_agent_services(config, agent_options, std::cin, std::cout);
+    // Use static approval (auto-approve) for Telegram since there is no
+    // interactive terminal to prompt.
+    auto static_approval = std::make_shared<StaticApprovalProvider>(true);
+    services.approval_provider = static_approval;
+
+    // Keep a reference to the transport before moving services
+    auto transport = services.http_transport;
+
+    std::unique_ptr<Agent> agent =
+        create_agent(workspace_root, config, agent_options, std::move(services));
+
+    TelegramGateway gateway(token_env, *agent, transport, workspace_root);
+    return gateway.run();
+}
+
+int run_api_server(int argc, char* argv[]) {
+    const std::filesystem::path workspace_root = std::filesystem::current_path();
+    const AppConfig config = load_app_config(workspace_root);
+
+    // Parse --port option (default 9090)
+    unsigned short port = 9090;
+    auto args = collect_cli_args(argc, argv, 2);
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--port" && i + 1 < args.size()) {
+            try {
+                int p = std::stoi(args[i + 1]);
+                if (p > 0 && p <= 65535) port = static_cast<unsigned short>(p);
+            } catch (...) {}
+            ++i;
+        }
+    }
+
+    AgentCliOptions agent_options;
+    agent_options.model = config.default_model;
+
+    AgentServices services =
+        create_platform_agent_services(config, agent_options, std::cin, std::cout);
+    // Use static approval (auto-approve) for API server since there is no
+    // interactive terminal to prompt.
+    auto static_approval = std::make_shared<StaticApprovalProvider>(true);
+    services.approval_provider = static_approval;
+
+    std::unique_ptr<Agent> agent =
+        create_agent(workspace_root, config, agent_options, std::move(services));
+
+    ApiServer server(workspace_root, *agent, port);
+    return server.run(std::cout);
+}
+
 int run_benchmark(int argc, char* argv[]) {
     const std::filesystem::path workspace_root = std::filesystem::current_path();
     const AppConfig config = load_app_config(workspace_root);
@@ -156,10 +227,14 @@ int main(int argc, char* argv[]) {
                 return run_agent(argc, argv);
             case TopLevelCommandType::web_chat:
                 return run_web_chat(argc, argv);
+            case TopLevelCommandType::telegram:
+                return run_telegram(argc, argv);
             case TopLevelCommandType::bench:
                 return run_benchmark(argc, argv);
             case TopLevelCommandType::mcp_server:
                 return run_mcp_server();
+            case TopLevelCommandType::api_server:
+                return run_api_server(argc, argv);
             case TopLevelCommandType::invalid:
                 print_usage(argv[0]);
                 return 1;

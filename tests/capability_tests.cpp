@@ -26,6 +26,7 @@
 #include "../src/agent/permission_policy.h"
 #include "../src/agent/tool_set_factory.h"
 #include "../src/agent/plugin_loader.h"
+#include "../src/agent/skill_loader.h"
 #include "../src/app/app_config.h"
 #include "../src/app/static_approval_provider.h"
 #include "../src/app/program_cli.h"
@@ -907,6 +908,88 @@ void test_cli_all_commands() {
     expect_true(c5.type == TopLevelCommandType::agent, "CLI empty defaults to agent");
     auto c6 = resolve_top_level_command({"--help"});
     expect_true(c6.type == TopLevelCommandType::usage, "CLI --help");
+    auto c7 = resolve_top_level_command({"telegram"});
+    expect_true(c7.type == TopLevelCommandType::telegram, "CLI telegram");
+    auto c8 = resolve_top_level_command({"api-server"});
+    expect_true(c8.type == TopLevelCommandType::api_server, "CLI api-server");
+    auto c9 = resolve_top_level_command({"api"});
+    expect_true(c9.type == TopLevelCommandType::api_server, "CLI api alias");
+}
+
+// ============================================================
+// 16. SKILL LOADER TESTS
+// ============================================================
+
+void test_skill_loader_discover_empty() {
+    auto tmp = std::filesystem::temp_directory_path() / "bolt_test_skills_empty";
+    std::filesystem::create_directories(tmp);
+    auto skills = SkillLoader::discover(tmp);
+    expect_true(skills.empty(), "discover empty dir yields no skills");
+    std::filesystem::remove_all(tmp);
+}
+
+void test_skill_loader_discover_nonexistent() {
+    auto skills = SkillLoader::discover("/nonexistent/bolt/skills");
+    expect_true(skills.empty(), "discover nonexistent dir yields no skills");
+}
+
+void test_skill_loader_parse_frontmatter() {
+    std::string content = "---\nname: Code Review\ndescription: Guidelines for reviewing code\nauto_load: true\n---\nReview all code carefully.\n";
+    Skill s = SkillLoader::parse_frontmatter(content, "/tmp/code-review.md");
+    expect_true(s.name == "Code Review", "parsed name");
+    expect_true(s.description == "Guidelines for reviewing code", "parsed description");
+    expect_true(s.auto_load == true, "parsed auto_load");
+    expect_true(s.content == "Review all code carefully.\n", "parsed content");
+}
+
+void test_skill_loader_parse_no_frontmatter() {
+    std::string content = "Just plain content.\nNo frontmatter here.\n";
+    Skill s = SkillLoader::parse_frontmatter(content, "/tmp/plain.md");
+    expect_true(s.name == "plain", "name from filename stem");
+    expect_true(s.auto_load == false, "default auto_load is false");
+    expect_true(s.content == content, "content is full file");
+}
+
+void test_skill_loader_format_for_prompt() {
+    std::vector<Skill> skills;
+    Skill s1;
+    s1.name = "Test Skill";
+    s1.content = "Do testing things.";
+    s1.auto_load = true;
+    skills.push_back(s1);
+
+    Skill s2;
+    s2.name = "Manual Skill";
+    s2.content = "Manual content.";
+    s2.auto_load = false;
+    skills.push_back(s2);
+
+    std::string result = SkillLoader::format_for_prompt(skills);
+    expect_true(result.find("Test Skill") != std::string::npos, "includes auto_load skill");
+    expect_true(result.find("Manual Skill") == std::string::npos, "excludes non-auto_load skill");
+}
+
+void test_skill_loader_discover_md_files() {
+    auto tmp = std::filesystem::temp_directory_path() / "bolt_test_skills_md";
+    std::filesystem::create_directories(tmp);
+
+    // Create a skill file
+    {
+        std::ofstream f(tmp / "testing.md");
+        f << "---\nname: Testing\ndescription: Test guidelines\nauto_load: false\n---\nWrite tests first.\n";
+    }
+    // Create a non-md file (should be ignored)
+    {
+        std::ofstream f(tmp / "readme.txt");
+        f << "Not a skill.\n";
+    }
+
+    auto skills = SkillLoader::discover(tmp);
+    expect_true(skills.size() == 1, "discover finds one .md file");
+    expect_true(skills[0].name == "Testing", "discovered skill name");
+    expect_true(skills[0].description == "Test guidelines", "discovered skill description");
+
+    std::filesystem::remove_all(tmp);
 }
 
 // ============================================================
@@ -1255,6 +1338,14 @@ int main() {
         {"[PLUGIN] load tools from plugins dir", test_plugin_loader_load_tools},
         {"[PLUGIN] skip invalid plugins", test_plugin_loader_skips_invalid},
         {"[PLUGIN] tool run uses command runner", test_plugin_tool_run_uses_command_runner},
+
+        // 16. Skill loader
+        {"[SKILL] discover empty directory", test_skill_loader_discover_empty},
+        {"[SKILL] discover nonexistent directory", test_skill_loader_discover_nonexistent},
+        {"[SKILL] parse frontmatter", test_skill_loader_parse_frontmatter},
+        {"[SKILL] parse no frontmatter", test_skill_loader_parse_no_frontmatter},
+        {"[SKILL] format for prompt filters auto_load", test_skill_loader_format_for_prompt},
+        {"[SKILL] discover md files", test_skill_loader_discover_md_files},
     };
 
     std::cout << "Starting " << tests.size() << " capability tests...\n" << std::flush;
