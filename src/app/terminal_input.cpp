@@ -148,7 +148,10 @@ std::optional<std::string> TerminalInput::read_line(const std::string& prompt) {
                 refresh_line(active_prompt);
                 break;
             default:
-                if (key >= 32 && key < 127) {
+                if (key == -1) {
+                    // Multi-byte UTF-8 character already inserted by read_key()
+                    refresh_line(active_prompt);
+                } else if (key >= 32 && key < 127) {
                     insert_char(static_cast<char>(key));
                     refresh_line(active_prompt);
                 }
@@ -241,7 +244,6 @@ int TerminalInput::read_key() {
     int c = ::_getch();
     if (c == EOF) return KEY_CTRL_D;
     if (c == 0 || c == 0xE0) {
-        // Extended key — read second byte
         int ext = ::_getch();
         switch (ext) {
             case 72: return KEY_UP;
@@ -254,13 +256,39 @@ int TerminalInput::read_key() {
         }
         return KEY_ESCAPE;
     }
+    // Handle multi-byte UTF-8 characters (Chinese, etc.)
+    // UTF-8 leading bytes: 110xxxxx=2 bytes, 1110xxxx=3 bytes, 11110xxx=4 bytes
+    if ((c & 0xE0) == 0xC0 || (c & 0xF0) == 0xE0 || (c & 0xF8) == 0xF0) {
+        int bytes = (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 4;
+        // Insert first byte, then read remaining bytes and insert them directly
+        insert_char(static_cast<char>(c));
+        for (int i = 1; i < bytes; ++i) {
+            int next = ::_getch();
+            if (next != EOF) insert_char(static_cast<char>(next));
+        }
+        return -1;  // Signal: character already inserted
+    }
     return c;
 #else
     char c;
     int nread = ::read(input_fd_, &c, 1);
-    if (nread <= 0) return KEY_CTRL_D;  // EOF
+    if (nread <= 0) return KEY_CTRL_D;
     if (c == KEY_ESCAPE) return read_escape_sequence();
-    return static_cast<unsigned char>(c);
+
+    unsigned char uc = static_cast<unsigned char>(c);
+    // Handle multi-byte UTF-8 characters (Chinese, Japanese, emoji, etc.)
+    if ((uc & 0xE0) == 0xC0 || (uc & 0xF0) == 0xE0 || (uc & 0xF8) == 0xF0) {
+        int bytes = (uc & 0xE0) == 0xC0 ? 2 : (uc & 0xF0) == 0xE0 ? 3 : 4;
+        insert_char(c);
+        for (int i = 1; i < bytes; ++i) {
+            char next;
+            if (::read(input_fd_, &next, 1) == 1) {
+                insert_char(next);
+            }
+        }
+        return -1;  // Signal: character already inserted
+    }
+    return uc;
 #endif
 }
 
