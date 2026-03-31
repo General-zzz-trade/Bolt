@@ -68,7 +68,7 @@ All tests must pass before PR. Run all:
 ## Interactive Commands
 
 ```
-Session:    /save [name]  /load <id>  /sessions  /delete <id>  /export [file]  /memory  /whoami
+Session:    /save [name]  /load <id>  /sessions  /delete <id>  /export [file]  /rename <name>  /memory  /whoami
 Context:    /clear  /compact  /undo  /reset  /context  /btw <question>
 Display:    /model  /cost  /status  /tools [verbose]  /diff  /doctor
 Mode:       /fast  /think [level]  /verbose  /plan  /auto
@@ -175,3 +175,6 @@ npm/            # npm package (bolt-agent)
 - Small models (name contains 8k/mini/flash/turbo/instant) auto-enable compact prompt + core tools filter
 - Trace observer must be cleared before slash commands to prevent ASAN stack-use-after-scope
 - Windows builds need `#ifdef _WIN32` guards for: termios, sigaction, isatty, WIFEXITED, setsockopt timeval, ssize_t
+- Thinking models (kimi-k2.5, deepseek-reasoner) require `temperature=1`, `max_tokens=16384`, and `reasoning_content` preserved in assistant message history — without it, API returns 400
+- Streaming output: `stream_token()` outputs tokens immediately via `output_ << token << flush`; `end_stream()` only cleans state, does not re-render
+- Agent destructor joins the async `file_index_task_` future; `file_index_` is built in background at startup
