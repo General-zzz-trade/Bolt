@@ -18,6 +18,7 @@
 #include "app/agent_factory.h"
 #include "app/app_config.h"
 #include "app/agent_runner.h"
+#include "app/file_audit_logger.h"
 #include "app/setup_wizard.h"
 #include "app/static_approval_provider.h"
 #include "app/benchmark_runner.h"
@@ -76,8 +77,15 @@ int run_agent(int argc, char* argv[]) {
     const AppConfig config = load_app_config(workspace_root);
     const AgentCliOptions options =
         resolve_agent_cli_options(args, config);
+    AgentServices services =
+        create_platform_agent_services(config, options, std::cin, std::cout);
+    auto approval_provider = services.approval_provider;
+    if (services.audit_logger == nullptr) {
+        services.audit_logger = std::make_shared<FileAuditLogger>(
+            workspace_root / ".bolt" / "audit.log");
+    }
     std::unique_ptr<Agent> agent =
-        create_platform_agent(workspace_root, config, options, std::cin, std::cout);
+        create_agent(workspace_root, config, options, std::move(services));
 
     // Pipe mode: read stdin and combine with prompt, then single-turn
     bool stdin_piped = false;
@@ -117,7 +125,8 @@ int run_agent(int argc, char* argv[]) {
         return run_agent_single_turn(*agent, options.prompt, std::cout);
     }
 
-    return run_agent_interactive_loop(*agent, std::cin, std::cout, workspace_root, options.resume);
+    return run_agent_interactive_loop(*agent, std::cin, std::cout, workspace_root,
+                                      options.resume, approval_provider);
 }
 
 int run_web_chat(int argc, char* argv[]) {

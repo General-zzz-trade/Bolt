@@ -16,9 +16,14 @@
 
 #include "../agent/agent.h"
 #include "../agent/skill_loader.h"
+#include "../core/interfaces/approval_provider.h"
 #include "../core/session/session_store.h"
+#include "permission_rule_engine.h"
 #include "setup_wizard.h"
+#include "settings_store.h"
+#include "slash_command_registry.h"
 #include "terminal_renderer.h"
+#include "terminal_approval_provider.h"
 #include "terminal_input.h"
 #include "terminal_ui_config.h"
 #include "signal_handler.h"
@@ -136,6 +141,301 @@ struct UndoEntry {
     std::string original_content;
 };
 
+std::string trim_copy(const std::string& value) {
+    const auto begin = value.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) return "";
+    const auto end = value.find_last_not_of(" \t\r\n");
+    return value.substr(begin, end - begin + 1);
+}
+
+bool path_has_prefix(const std::filesystem::path& path, const std::filesystem::path& prefix) {
+    if (path.empty() || prefix.empty()) return false;
+
+    auto lhs = path.lexically_normal();
+    auto rhs = prefix.lexically_normal();
+
+    auto lit = lhs.begin();
+    auto rit = rhs.begin();
+    for (; rit != rhs.end(); ++rit, ++lit) {
+        if (lit == lhs.end() || *lit != *rit) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::vector<SlashCommandDirectory> command_dirs_for(const std::filesystem::path& workspace_root,
+                                                    const SettingsStore& settings) {
+    std::vector<SlashCommandDirectory> dirs;
+    if (!workspace_root.empty()) {
+        dirs.push_back({workspace_root / ".bolt" / "commands", SlashCommandSource::workspace});
+    }
+
+    const char* home_env = std::getenv("HOME");
+#ifdef _WIN32
+    if (home_env == nullptr) home_env = std::getenv("USERPROFILE");
+#endif
+    if (home_env != nullptr && *home_env != '\0') {
+        dirs.push_back({std::filesystem::path(home_env) / ".bolt" / "commands",
+                        SlashCommandSource::user});
+    }
+
+    for (auto dir : settings.additional_command_dirs()) {
+        SlashCommandSource source = SlashCommandSource::user;
+        if (dir.is_relative() && !workspace_root.empty()) {
+            dir = workspace_root / dir;
+            source = SlashCommandSource::workspace;
+        } else if (!workspace_root.empty() && path_has_prefix(dir, workspace_root)) {
+            source = SlashCommandSource::workspace;
+        }
+        dirs.push_back({dir, source});
+    }
+
+    return dirs;
+}
+
+std::string join_items(const std::vector<std::string>& items) {
+    if (items.empty()) return "(none)";
+
+    std::ostringstream output;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        if (i > 0) output << ", ";
+        output << items[i];
+    }
+    return output.str();
+}
+
+void render_interactive_help(std::ostream& output, const SlashCommandRegistry& registry) {
+    output << registry.render_help();
+    output << "\n\033[1;35m Shell\033[0m\n";
+    output << "  \033[1m! <command>\033[0m        Execute shell command without leaving Bolt\n";
+    output << "\n\033[1;35m Shortcuts\033[0m\n";
+    output << "  \033[2mCtrl+C\033[0m cancel  \033[2mCtrl+L\033[0m clear screen  \033[2mCtrl+D\033[0m exit\n";
+    output << "  \033[2m↑/↓\033[0m history   \033[2mTab\033[0m complete       \033[2m@file\033[0m include file\n";
+    output << "\n\033[1;35m UI\033[0m\n";
+    output << "  \033[2mDefault output preserves terminal scrollback.\033[0m\n";
+    output << "  \033[2mSet BOLT_TRANSIENT_UI=1 to re-enable animated spinner/status overlays.\033[0m\n\n";
+}
+
+void render_permission_snapshot(std::ostream& output,
+                                const PermissionRuleSnapshot& snapshot) {
+    output << "\n\033[1;35m Permissions\033[0m\n\n";
+    output << "  Effective mode: " << permission_mode_to_string(snapshot.effective_mode) << "\n";
+    output << "  Global mode:    "
+           << (snapshot.global_has_mode ? permission_mode_to_string(snapshot.global_mode)
+                                        : "(inherit)")
+           << "\n";
+    output << "  Workspace mode: "
+           << (snapshot.workspace_has_mode ? permission_mode_to_string(snapshot.workspace_mode)
+                                           : "(inherit)")
+           << "\n";
+    output << "\n  Global allow:    " << join_items(snapshot.global_allow_tools) << "\n";
+    output << "  Global deny:     " << join_items(snapshot.global_deny_tools) << "\n";
+    output << "  Workspace allow: " << join_items(snapshot.workspace_allow_tools) << "\n";
+    output << "  Workspace deny:  " << join_items(snapshot.workspace_deny_tools) << "\n";
+    output << "\n  \033[2mUsage: /permissions mode <prompt|auto-approve|auto-deny> [global|workspace]\033[0m\n";
+    output << "  \033[2m       /permissions allow <tool> [global|workspace]\033[0m\n";
+    output << "  \033[2m       /permissions deny <tool> [global|workspace]\033[0m\n";
+    output << "  \033[2m       /permissions remove <tool>\033[0m\n";
+    output << "  \033[2m       /permissions clear [global|workspace|all]\033[0m\n\n";
+}
+
+void handle_permissions_command(const std::string& line,
+                                TerminalApprovalProvider* approval_provider,
+                                std::ostream& output) {
+    if (approval_provider == nullptr) {
+        output << "\033[33mCurrent approval provider does not support interactive permission rules.\033[0m\n";
+        return;
+    }
+
+    const std::string rest =
+        line.size() > std::string("/permissions").size()
+            ? trim_copy(line.substr(std::string("/permissions").size()))
+            : "";
+    if (rest.empty()) {
+        render_permission_snapshot(output, approval_provider->rules());
+        return;
+    }
+
+    std::istringstream input(rest);
+    std::string action;
+    input >> action;
+
+    if (action == "mode") {
+        std::string mode_token;
+        std::string scope_token;
+        input >> mode_token >> scope_token;
+        PermissionMode mode;
+        if (!parse_permission_mode(mode_token, &mode)) {
+            output << "\033[33mUsage: /permissions mode <prompt|auto-approve|auto-deny> [global|workspace]\033[0m\n";
+            return;
+        }
+        PermissionRuleScope scope = PermissionRuleScope::workspace;
+        if (!scope_token.empty() && !parse_permission_scope(scope_token, &scope)) {
+            output << "\033[33mUnknown scope: " << scope_token << "\033[0m\n";
+            return;
+        }
+        approval_provider->set_mode(scope, mode);
+        output << "\033[2mSet " << permission_scope_to_string(scope)
+               << " mode to " << permission_mode_to_string(mode) << ".\033[0m\n";
+        return;
+    }
+
+    if (action == "allow" || action == "deny") {
+        std::string tool_name;
+        std::string scope_token;
+        input >> tool_name >> scope_token;
+        if (tool_name.empty()) {
+            output << "\033[33mUsage: /permissions " << action
+                   << " <tool> [global|workspace]\033[0m\n";
+            return;
+        }
+        PermissionRuleScope scope = PermissionRuleScope::workspace;
+        if (!scope_token.empty() && !parse_permission_scope(scope_token, &scope)) {
+            output << "\033[33mUnknown scope: " << scope_token << "\033[0m\n";
+            return;
+        }
+        if (action == "allow") {
+            approval_provider->allow_tool(scope, tool_name);
+        } else {
+            approval_provider->deny_tool(scope, tool_name);
+        }
+        output << "\033[2m" << action << " " << tool_name << " in "
+               << permission_scope_to_string(scope) << " rules.\033[0m\n";
+        return;
+    }
+
+    if (action == "remove") {
+        std::string tool_name;
+        input >> tool_name;
+        if (tool_name.empty()) {
+            output << "\033[33mUsage: /permissions remove <tool>\033[0m\n";
+            return;
+        }
+        if (approval_provider->remove_tool(tool_name)) {
+            output << "\033[2mRemoved permission rules for " << tool_name << ".\033[0m\n";
+        } else {
+            output << "\033[33mNo persisted rules found for " << tool_name << ".\033[0m\n";
+        }
+        return;
+    }
+
+    if (action == "clear") {
+        std::string scope_token;
+        input >> scope_token;
+        if (scope_token.empty() || scope_token == "workspace" || scope_token == "project" ||
+            scope_token == "local") {
+            approval_provider->clear_rules(PermissionRuleScope::workspace);
+            output << "\033[2mCleared workspace permission rules.\033[0m\n";
+            return;
+        }
+        if (scope_token == "global" || scope_token == "user") {
+            approval_provider->clear_rules(PermissionRuleScope::global);
+            output << "\033[2mCleared global permission rules.\033[0m\n";
+            return;
+        }
+        if (scope_token == "all") {
+            approval_provider->clear_rules(PermissionRuleScope::global);
+            approval_provider->clear_rules(PermissionRuleScope::workspace);
+            output << "\033[2mCleared all persisted permission rules.\033[0m\n";
+            return;
+        }
+        output << "\033[33mUsage: /permissions clear [global|workspace|all]\033[0m\n";
+        return;
+    }
+
+    output << "\033[33mUnknown /permissions subcommand. Type /permissions for usage.\033[0m\n";
+}
+
+bool handle_config_command(const std::string& line, SettingsStore* settings, std::ostream& output) {
+    if (settings == nullptr) return false;
+
+    const std::string rest =
+        line.size() > std::string("/config").size()
+            ? trim_copy(line.substr(std::string("/config").size()))
+            : "";
+    if (rest.empty()) {
+        output << "\n\033[1;35m Settings\033[0m\n\n";
+        output << settings->format_resolved();
+        output << "\n  user:    " << settings->user_path().string() << "\n";
+        output << "  project: " << settings->project_path().string() << "\n";
+        output << "  local:   " << settings->local_path().string() << "\n\n";
+        output << "  \033[2mUsage: /config get <path>\033[0m\n";
+        output << "  \033[2m       /config set <user|project|local> <path> <value>\033[0m\n";
+        output << "  \033[2m       /config unset <user|project|local> <path>\033[0m\n\n";
+        return false;
+    }
+
+    std::istringstream input(rest);
+    std::string action;
+    input >> action;
+
+    if (action == "get") {
+        std::string path;
+        input >> path;
+        if (path.empty()) {
+            output << "\033[33mUsage: /config get <path>\033[0m\n";
+            return false;
+        }
+        if (!settings->contains(path)) {
+            output << "\033[33mSetting not found: " << path << "\033[0m\n";
+            return false;
+        }
+        output << "\033[2m" << path << " = " << settings->get(path).dump() << "\033[0m\n";
+        return false;
+    }
+
+    if (action == "set") {
+        std::string scope_token;
+        std::string path;
+        input >> scope_token >> path;
+        std::string raw_value;
+        std::getline(input, raw_value);
+        raw_value = trim_copy(raw_value);
+
+        SettingsScope scope;
+        if (!SettingsStore::parse_scope(scope_token, &scope) || path.empty() || raw_value.empty()) {
+            output << "\033[33mUsage: /config set <user|project|local> <path> <value>\033[0m\n";
+            return false;
+        }
+
+        const nlohmann::json value = SettingsStore::parse_value_literal(raw_value);
+        if (!settings->set(scope, path, value)) {
+            output << "\033[31mFailed to persist setting.\033[0m\n";
+            return false;
+        }
+
+        output << "\033[2mSaved " << path << " to "
+               << SettingsStore::scope_to_string(scope) << " settings.\033[0m\n";
+        return true;
+    }
+
+    if (action == "unset") {
+        std::string scope_token;
+        std::string path;
+        input >> scope_token >> path;
+
+        SettingsScope scope;
+        if (!SettingsStore::parse_scope(scope_token, &scope) || path.empty()) {
+            output << "\033[33mUsage: /config unset <user|project|local> <path>\033[0m\n";
+            return false;
+        }
+
+        if (!settings->erase(scope, path)) {
+            output << "\033[33mSetting not found in "
+                   << SettingsStore::scope_to_string(scope) << ": " << path << "\033[0m\n";
+            return false;
+        }
+
+        output << "\033[2mRemoved " << path << " from "
+               << SettingsStore::scope_to_string(scope) << " settings.\033[0m\n";
+        return true;
+    }
+
+    output << "\033[33mUnknown /config subcommand. Type /config for usage.\033[0m\n";
+    return false;
+}
+
 }  // namespace
 
 std::string build_agent_banner(const Agent& agent) {
@@ -227,29 +527,30 @@ int run_agent_single_turn(Agent& agent, const std::string& prompt, std::ostream&
 
 int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostream& output,
                                const std::filesystem::path& workspace_root,
-                               bool resume_last) {
+                               bool resume_last,
+                               std::shared_ptr<IApprovalProvider> approval_provider) {
     // Initialize components
     TerminalRenderer renderer(output);
     TerminalInput term_input(STDIN_FILENO, output);
     SignalHandler::instance().install();
     TokenTracker tracker;
     const TerminalUiConfig ui_config = load_terminal_ui_config();
+    auto interactive_approval =
+        std::dynamic_pointer_cast<TerminalApprovalProvider>(approval_provider);
+    SettingsStore settings(workspace_root);
+    settings.load();
+    SlashCommandRegistry command_registry = SlashCommandRegistry::with_builtin_commands();
+    auto refresh_command_registry = [&]() {
+        settings.load();
+        command_registry = SlashCommandRegistry::with_builtin_commands();
+        command_registry.load_custom_commands(command_dirs_for(workspace_root, settings));
+        term_input.set_slash_commands(command_registry.command_names());
+    };
+    refresh_command_registry();
 
     // Undo stack
     std::vector<UndoEntry> undo_stack;
 
-    // Configure tab completion
-    std::vector<std::string> slash_commands = {
-        "/help", "/quit", "/exit", "/q",
-        "/clear", "/compact", "/model", "/cost",
-        "/debug", "/save", "/load", "/sessions", "/delete",
-        "/export", "/undo", "/diff", "/status", "/reset",
-        "/sandbox", "/plugins", "/memory", "/team", "/skills",
-        "/init", "/context", "/doctor", "/plan", "/auto",
-        "/stop", "/fast", "/think", "/verbose", "/tools",
-        "/btw", "/whoami", "/id", "/rename"
-    };
-    term_input.set_slash_commands(slash_commands);
     if (!workspace_root.empty()) {
         term_input.set_workspace_root(workspace_root);
     }
@@ -333,13 +634,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         }
 
         // Trim
-        auto trim = [](const std::string& s) -> std::string {
-            auto b = s.find_first_not_of(" \t\r\n");
-            if (b == std::string::npos) return "";
-            auto e = s.find_last_not_of(" \t\r\n");
-            return s.substr(b, e - b + 1);
-        };
-        line = trim(line);
+        line = trim_copy(line);
         if (line.empty()) continue;
 
         // === Slash Commands ===
@@ -361,52 +656,19 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         }
 
         if (line == "/help") {
-            output << "\n\033[1;35m Session\033[0m\n";
-            output << "  \033[1m/save\033[0m \033[2m[name]\033[0m     Save current session\n";
-            output << "  \033[1m/load\033[0m \033[2m<id>\033[0m       Load a saved session\n";
-            output << "  \033[1m/sessions\033[0m          List saved sessions\n";
-            output << "  \033[1m/delete\033[0m \033[2m<id>\033[0m     Delete a session\n";
-            output << "  \033[1m/export\033[0m \033[2m[file]\033[0m   Export chat to markdown\n";
-            output << "  \033[1m/rename\033[0m \033[2m<name>\033[0m   Rename current session\n";
-            output << "  \033[1m/memory\033[0m \033[2m[cmd]\033[0m    Manage persistent memory\n";
-            output << "  \033[1m/whoami\033[0m            Show session info (model, tokens, cost)\n";
-            output << "\n\033[1;35m Context\033[0m\n";
-            output << "  \033[1m/clear\033[0m             Clear conversation history\n";
-            output << "  \033[1m/compact\033[0m           Compress context to save tokens\n";
-            output << "  \033[1m/context\033[0m           Show context window usage\n";
-            output << "  \033[1m/undo\033[0m              Revert last file edit\n";
-            output << "  \033[1m/reset\033[0m             Full reset (history + index)\n";
-            output << "  \033[1m/btw\033[0m \033[2m<question>\033[0m  Side question (doesn't affect main session)\n";
-            output << "\n\033[1;35m Display\033[0m\n";
-            output << "  \033[1m/model\033[0m \033[2m[name]\033[0m    Show or switch model\n";
-            output << "  \033[1m/cost\033[0m              Show token usage and cost\n";
-            output << "  \033[1m/status\033[0m            Show current status\n";
-            output << "  \033[1m/tools\033[0m \033[2m[verbose]\033[0m List available tools\n";
-            output << "  \033[1m/diff\033[0m              Show git diff\n";
-            output << "  \033[1m/doctor\033[0m            Run environment diagnostics\n";
-            output << "\n\033[1;35m Mode\033[0m\n";
-            output << "  \033[1m/fast\033[0m              Toggle fast mode (shorter prompts)\n";
-            output << "  \033[1m/think\033[0m \033[2m[level]\033[0m   Set reasoning depth (normal/deep/fast)\n";
-            output << "  \033[1m/verbose\033[0m           Toggle verbose/debug output\n";
-            output << "  \033[1m/plan\033[0m              Plan mode (propose before executing)\n";
-            output << "  \033[1m/auto\033[0m              Auto-approve mode\n";
-            output << "\n\033[1;35m System\033[0m\n";
-            output << "  \033[1m/init\033[0m              Create bolt.md project config\n";
-            output << "  \033[1m/stop\033[0m              Stop current operation\n";
-            output << "  \033[1m/plugins\033[0m           List installed plugins\n";
-            output << "  \033[1m/skills\033[0m            List and load skills\n";
-            output << "  \033[1m/sandbox\033[0m           Show sandbox status\n";
-            output << "  \033[1m/team\033[0m \033[2m<tasks>\033[0m    Run parallel tasks (git worktrees)\n";
-            output << "  \033[1m/quit\033[0m              Exit Bolt\n";
-            output << "\n\033[1;35m Shell\033[0m\n";
-            output << "  \033[1m! <command>\033[0m        Execute shell command without leaving Bolt\n";
-            output << "\n\033[1;35m Shortcuts\033[0m\n";
-            output << "  \033[2mCtrl+C\033[0m cancel  \033[2mCtrl+L\033[0m clear screen  \033[2mCtrl+D\033[0m exit\n";
-            output << "  \033[2m↑/↓\033[0m history   \033[2mTab\033[0m complete       \033[2m@file\033[0m include file\n";
-            output << "\n\033[1;35m UI\033[0m\n";
-            output << "  \033[2mDefault output preserves terminal scrollback.\033[0m\n";
-            output << "  \033[2mSet BOLT_TRANSIENT_UI=1 to re-enable animated spinner/status overlays.\033[0m\n";
-            output << "\n";
+            render_interactive_help(output, command_registry);
+            continue;
+        }
+
+        if (line == "/permissions" || line.rfind("/permissions ", 0) == 0) {
+            handle_permissions_command(line, interactive_approval.get(), output);
+            continue;
+        }
+
+        if (line == "/config" || line.rfind("/config ", 0) == 0) {
+            if (handle_config_command(line, &settings, output)) {
+                refresh_command_registry();
+            }
             continue;
         }
 
@@ -499,7 +761,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         if ((line == "/save" || line.rfind("/save ", 0) == 0) && sessions) {
             std::string save_id = current_session_id;
             if (line.size() > 6) {
-                save_id = trim(line.substr(6));
+                save_id = trim_copy(line.substr(6));
                 current_session_id = save_id;
             }
             auto msgs = agent.get_chat_messages();
@@ -514,7 +776,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         }
 
         if (line.rfind("/load ", 0) == 0 && sessions) {
-            std::string id = trim(line.substr(6));
+            std::string id = trim_copy(line.substr(6));
             auto msgs = sessions->load(id);
             if (msgs.empty()) {
                 output << "\033[33mSession not found: " << id << "\033[0m\n";
@@ -543,7 +805,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         }
 
         if (line.rfind("/delete ", 0) == 0 && sessions) {
-            std::string id = trim(line.substr(8));
+            std::string id = trim_copy(line.substr(8));
             if (sessions->remove(id)) {
                 output << "\033[2mDeleted session: " << id << "\033[0m\n";
             } else {
@@ -555,7 +817,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         if (line == "/export" || line.rfind("/export ", 0) == 0) {
             std::string filename;
             if (line.size() > 8) {
-                filename = trim(line.substr(8));
+                filename = trim_copy(line.substr(8));
             } else {
                 // Generate default filename
                 auto now = std::chrono::system_clock::now();
@@ -733,10 +995,10 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
                     std::filesystem::path(home_env) / ".bolt" / "skills");
             }
 
-            std::string subcmd = line.size() > 8 ? trim(line.substr(8)) : "";
+            std::string subcmd = line.size() > 8 ? trim_copy(line.substr(8)) : "";
 
             if (subcmd.rfind("load ", 0) == 0) {
-                std::string target = trim(subcmd.substr(5));
+                std::string target = trim_copy(subcmd.substr(5));
                 // Search for skill by name in both lists
                 const Skill* found = nullptr;
                 for (const auto& s : ws_skills) {
@@ -793,7 +1055,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         }
 
         if (line == "/memory" || line.rfind("/memory ", 0) == 0) {
-            std::string subcmd = line.size() > 8 ? trim(line.substr(8)) : "";
+            std::string subcmd = line.size() > 8 ? trim_copy(line.substr(8)) : "";
 
             if (subcmd.empty() || subcmd == "list") {
                 // List all memories
@@ -821,11 +1083,11 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
                 output << "  \033[2m       /memory remove <key>\033[0m\n";
                 output << "  \033[2m       /memory clear\033[0m\n\n";
             } else if (subcmd.rfind("set ", 0) == 0) {
-                auto rest = trim(subcmd.substr(4));
+                auto rest = trim_copy(subcmd.substr(4));
                 auto space = rest.find(' ');
                 if (space != std::string::npos) {
                     std::string key = rest.substr(0, space);
-                    std::string value = trim(rest.substr(space + 1));
+                    std::string value = trim_copy(rest.substr(space + 1));
                     // Workspace memory by default, global if key starts with "global."
                     if (key.rfind("global.", 0) == 0) {
                         key = key.substr(7);
@@ -839,7 +1101,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
                     output << "\033[33mUsage: /memory set <key> <value>\033[0m\n";
                 }
             } else if (subcmd.rfind("remove ", 0) == 0) {
-                std::string key = trim(subcmd.substr(7));
+                std::string key = trim_copy(subcmd.substr(7));
                 bool removed = agent.workspace_memory().remove(key) || agent.global_memory().remove(key);
                 if (removed) {
                     output << "\033[2mRemoved: " << key << "\033[0m\n";
@@ -1019,15 +1281,26 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         }
 
         if (line == "/auto") {
-            output << "\033[2mAuto mode: All tool calls will be auto-approved.\033[0m\n";
-            output << "\033[2mTo enable at startup: bolt agent --approval-mode auto\033[0m\n";
-            output << "\033[2mOr set: approval.mode = auto in bolt.conf\033[0m\n";
+            if (interactive_approval) {
+                const PermissionMode current_mode = interactive_approval->mode();
+                const PermissionMode next_mode =
+                    current_mode == PermissionMode::auto_approve ? PermissionMode::prompt
+                                                                 : PermissionMode::auto_approve;
+                interactive_approval->set_mode(PermissionRuleScope::workspace, next_mode);
+                output << "\033[2mWorkspace approval mode set to "
+                       << permission_mode_to_string(next_mode) << ".\033[0m\n";
+                output << "\033[2mUse /permissions to inspect or change persisted rules.\033[0m\n";
+            } else {
+                output << "\033[2mAuto mode: All tool calls will be auto-approved.\033[0m\n";
+                output << "\033[2mTo enable at startup: bolt agent --approval-mode auto\033[0m\n";
+                output << "\033[2mOr set: approval.mode = auto in bolt.conf\033[0m\n";
+            }
             continue;
         }
 
         // === Shell execution: ! <command> ===
         if (line.size() > 2 && line[0] == '!' && line[1] == ' ') {
-            std::string shell_cmd = trim(line.substr(2));
+            std::string shell_cmd = trim_copy(line.substr(2));
             if (!shell_cmd.empty()) {
                 output << "\033[2m$ " << shell_cmd << "\033[0m\n";
                 FILE* pipe = popen(shell_cmd.c_str(), "r");
@@ -1073,7 +1346,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
 
         // /think — set reasoning depth
         if (line == "/think" || line.rfind("/think ", 0) == 0) {
-            std::string level = line.size() > 7 ? trim(line.substr(7)) : "";
+            std::string level = line.size() > 7 ? trim_copy(line.substr(7)) : "";
             if (level.empty() || level == "normal") {
                 output << "\033[2mThinking: normal (default)\033[0m\n";
             } else if (level == "deep") {
@@ -1115,7 +1388,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
 
         // /btw <question> — side question without changing session context
         if (line.rfind("/btw ", 0) == 0) {
-            std::string question = trim(line.substr(5));
+            std::string question = trim_copy(line.substr(5));
             if (question.empty()) {
                 output << "\033[33mUsage: /btw <question>\033[0m\n";
                 continue;
@@ -1151,7 +1424,7 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
 
         // /rename <name> — rename current session
         if (line.rfind("/rename ", 0) == 0) {
-            std::string new_name = trim(line.substr(8));
+            std::string new_name = trim_copy(line.substr(8));
             if (new_name.empty()) {
                 output << "\033[33mUsage: /rename <name>\033[0m\n";
             } else {
@@ -1163,6 +1436,18 @@ int run_agent_interactive_loop(Agent& agent, std::istream& /*input*/, std::ostre
         if (line == "/rename") {
             output << "\033[33mUsage: /rename <name>\033[0m\n";
             continue;
+        }
+
+        if (const SlashCommandEntry* custom_command = command_registry.match_input(line)) {
+            const std::string arguments =
+                line.size() > custom_command->name.size()
+                    ? trim_copy(line.substr(custom_command->name.size()))
+                    : "";
+            line = command_registry.expand_custom_prompt(*custom_command, arguments);
+            if (line.empty()) {
+                output << "\033[33mCustom command did not expand to a prompt.\033[0m\n";
+                continue;
+            }
         }
 
         // Unknown slash command

@@ -68,6 +68,9 @@ add_library(bolt_core STATIC
         src/app/agent_factory.cpp
         src/app/agent_cli_options.cpp
         src/app/agent_runner.cpp
+        src/app/settings_store.cpp
+        src/app/permission_rule_engine.cpp
+        src/app/slash_command_registry.cpp
         src/app/terminal_input.cpp
         src/app/approval_provider_factory.cpp
         src/app/file_audit_logger.cpp

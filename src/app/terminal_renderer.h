@@ -2,6 +2,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include "terminal_ui_config.h"
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -55,6 +57,7 @@ private:
     int terminal_width_ = 80;
     int terminal_height_ = 24;
     bool colors_enabled_ = true;
+    bool overlay_status_bar_enabled_ = false;
 
     // Streaming state
     bool in_code_block_ = false;

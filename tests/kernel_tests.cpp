@@ -30,9 +30,13 @@
 #include "../src/app/agent_cli_options.h"
 #include "../src/app/agent_services.h"
 #include "../src/app/agent_runner.h"
+#include "../src/app/permission_rule_engine.h"
 #include "../src/app/program_cli.h"
+#include "../src/app/settings_store.h"
+#include "../src/app/slash_command_registry.h"
 #include "../src/app/self_check_runner.h"
 #include "../src/app/static_approval_provider.h"
+#include "../src/app/terminal_approval_provider.h"
 #include "../src/app/terminal_ui_config.h"
 #include "../src/app/web_chat_cli_options.h"
 #include "../src/core/interfaces/audit_logger.h"
@@ -1608,7 +1612,7 @@ void expect_agent_runner_single_turn_writes_response() {
 
     const int exit_code = run_agent_single_turn(agent, "Say something.", output);
     expect_true(exit_code == 0, "Single-turn runner should return success");
-    expect_equal(output.str(), "single-turn reply\n\n",
+    expect_equal(output.str(), "single-turn reply\n",
                  "Single-turn runner should write the agent response");
 }
 
@@ -1655,6 +1659,198 @@ void expect_agent_runner_interactive_loop_handles_commands() {
                 "Interactive runner should only invoke the model for non-command inputs");
     expect_true(client_ptr->prompts()[1].find("first-question") == std::string::npos,
                 "Clearing history should remove prior conversation before the next turn");
+}
+
+void expect_settings_store_merges_scopes_and_additional_command_dirs() {
+    ScopedTempDir temp_dir;
+    ScopedEnvVar home("HOME");
+    const auto home_root = temp_dir.path() / "home";
+    const auto workspace_root = temp_dir.path() / "workspace";
+    std::filesystem::create_directories(home_root / ".bolt");
+    std::filesystem::create_directories(workspace_root / ".bolt");
+    home.set(home_root.string());
+
+    write_text_file(home_root / ".bolt" / "settings.json",
+                    R"({"model":"user-model","commands":{"additional_dirs":["extras"]}})");
+    write_text_file(workspace_root / ".bolt" / "settings.json",
+                    R"({"model":"project-model","sandbox":{"enabled":true}})");
+    write_text_file(workspace_root / ".bolt" / "settings.local.json",
+                    R"({"model":"local-model","ui":{"theme":"dense"}})");
+
+    SettingsStore settings(workspace_root);
+    settings.load();
+
+    const nlohmann::json model = settings.get("model");
+    expect_true(model.is_string() && model.get<std::string>() == "local-model",
+                "Local settings should override user and project values");
+    const nlohmann::json sandbox_enabled = settings.get("sandbox.enabled");
+    expect_true(sandbox_enabled.is_boolean() && sandbox_enabled.get<bool>(),
+                "Project settings should contribute merged values");
+    const nlohmann::json theme = settings.get("ui.theme");
+    expect_true(theme.is_string() && theme.get<std::string>() == "dense",
+                "Nested local settings should be readable");
+
+    const auto additional_dirs = settings.additional_command_dirs();
+    expect_true(additional_dirs.size() == 1,
+                "Settings should expose configured additional command directories");
+    expect_true(additional_dirs.front() == std::filesystem::path("extras"),
+                "Additional command directory should preserve configured relative path");
+}
+
+void expect_permission_rule_engine_persists_and_resolves_scope() {
+    ScopedTempDir temp_dir;
+    ScopedEnvVar home("HOME");
+    const auto home_root = temp_dir.path() / "home";
+    const auto workspace_root = temp_dir.path() / "workspace";
+    std::filesystem::create_directories(home_root);
+    std::filesystem::create_directories(workspace_root);
+    home.set(home_root.string());
+
+    PermissionRuleEngine writer(workspace_root);
+    writer.load();
+    writer.set_mode(PermissionRuleScope::global, PermissionMode::auto_deny);
+    writer.allow_tool(PermissionRuleScope::global, "read_file");
+    writer.set_mode(PermissionRuleScope::workspace, PermissionMode::auto_approve);
+    writer.deny_tool(PermissionRuleScope::workspace, "run_command");
+
+    PermissionRuleEngine reader(workspace_root);
+    reader.load();
+
+    const PermissionRuleSnapshot snapshot = reader.snapshot();
+    expect_true(snapshot.global_has_mode, "Global permission mode should persist");
+    expect_true(snapshot.workspace_has_mode, "Workspace permission mode should persist");
+    expect_true(snapshot.effective_mode == PermissionMode::auto_approve,
+                "Workspace mode should override global mode");
+    expect_true(reader.is_allowed("read_file"),
+                "Global allow list should persist across reloads");
+    expect_true(reader.is_denied("run_command"),
+                "Workspace deny list should persist across reloads");
+}
+
+void expect_slash_command_registry_loads_custom_commands_and_expands_arguments() {
+    ScopedTempDir temp_dir;
+    const auto workspace_dir = temp_dir.path() / "workspace-commands";
+    const auto user_dir = temp_dir.path() / "user-commands";
+    std::filesystem::create_directories(workspace_dir);
+    std::filesystem::create_directories(user_dir);
+
+    write_text_file(workspace_dir / "review.md",
+                    "# Review\nReview this area carefully:\n{{args}}\n");
+    write_text_file(user_dir / "explain.md",
+                    "# Explain\nExplain the current implementation.\n");
+
+    SlashCommandRegistry registry = SlashCommandRegistry::with_builtin_commands();
+    registry.load_custom_commands({
+        {workspace_dir, SlashCommandSource::workspace},
+        {user_dir, SlashCommandSource::user},
+    });
+
+    const SlashCommandEntry* review = registry.find("/review");
+    expect_true(review != nullptr && review->is_custom(),
+                "Registry should discover workspace custom commands");
+    expect_true(review->source == SlashCommandSource::workspace,
+                "Workspace command should preserve its source");
+
+    const SlashCommandEntry* explain = registry.find("/explain");
+    expect_true(explain != nullptr && explain->source == SlashCommandSource::user,
+                "Registry should discover user custom commands");
+
+    const SlashCommandEntry* matched = registry.match_input("/review auth flow");
+    expect_true(matched != nullptr && matched->name == "/review",
+                "Registry should match slash command input with arguments");
+
+    const std::string expanded = registry.expand_custom_prompt(*review, "auth flow");
+    expect_true(expanded.find("auth flow") != std::string::npos,
+                "Custom command expansion should interpolate arguments");
+}
+
+void expect_agent_runner_loads_workspace_custom_slash_commands() {
+    ScopedTempDir temp_dir;
+    ScopedEnvVar home("HOME");
+    const auto home_root = temp_dir.path() / "home";
+    const auto workspace_root = temp_dir.path() / "workspace";
+    std::filesystem::create_directories(home_root / ".bolt");
+    std::filesystem::create_directories(workspace_root / ".bolt" / "commands");
+    home.set(home_root.string());
+
+    write_text_file(workspace_root / ".bolt" / "commands" / "review.md",
+                    "# Review\nReview the following code path:\n{{args}}\n");
+
+    const auto file_system = std::make_shared<LocalTestFileSystem>();
+    const auto command_runner = std::make_shared<RecordingCommandRunner>();
+    const auto approval_provider =
+        std::make_shared<RecordingApprovalProvider>(std::vector<bool>{});
+
+    auto scripted_client = std::make_unique<ScriptedModelClient>(std::vector<std::string>{
+        R"({"action":"reply","content":"custom reply","reason":"done","risk":"low","requires_confirmation":"false"})",
+    });
+    ScriptedModelClient* client_ptr = scripted_client.get();
+
+    Agent agent(std::move(scripted_client), approval_provider, workspace_root, {}, {}, false,
+                nullptr, make_test_tool_registry(workspace_root, file_system, command_runner));
+
+    std::istringstream fake_cin("/review src/app\n/quit\n");
+    auto* original_cin_buf = std::cin.rdbuf(fake_cin.rdbuf());
+
+    std::istringstream input_unused;
+    std::ostringstream output;
+    const int exit_code =
+        run_agent_interactive_loop(agent, input_unused, output, workspace_root);
+
+    std::cin.rdbuf(original_cin_buf);
+
+    expect_true(exit_code == 0, "Interactive runner should handle custom slash commands");
+    expect_true(client_ptr->prompts().size() == 1,
+                "Custom slash command should expand into a normal agent turn");
+    expect_true(client_ptr->prompts()[0].find("Review the following code path:") !=
+                    std::string::npos,
+                "Expanded prompt should include markdown command body");
+    expect_true(client_ptr->prompts()[0].find("src/app") != std::string::npos,
+                "Expanded prompt should include command arguments");
+    expect_true(output.str().find("custom reply") != std::string::npos,
+                "Interactive runner should render the custom command response");
+}
+
+void expect_agent_runner_config_command_persists_local_settings() {
+    ScopedTempDir temp_dir;
+    ScopedEnvVar home("HOME");
+    const auto home_root = temp_dir.path() / "home";
+    const auto workspace_root = temp_dir.path() / "workspace";
+    std::filesystem::create_directories(home_root / ".bolt");
+    std::filesystem::create_directories(workspace_root);
+    home.set(home_root.string());
+
+    const auto file_system = std::make_shared<LocalTestFileSystem>();
+    const auto command_runner = std::make_shared<RecordingCommandRunner>();
+    const auto approval_provider =
+        std::make_shared<RecordingApprovalProvider>(std::vector<bool>{});
+
+    auto scripted_client = std::make_unique<ScriptedModelClient>(std::vector<std::string>{});
+    Agent agent(std::move(scripted_client), approval_provider, workspace_root, {}, {}, false,
+                nullptr, make_test_tool_registry(workspace_root, file_system, command_runner));
+
+    std::istringstream fake_cin(
+        "/config set local commands.additional_dirs [\"custom-cmds\"]\n"
+        "/config get commands.additional_dirs\n"
+        "/quit\n");
+    auto* original_cin_buf = std::cin.rdbuf(fake_cin.rdbuf());
+
+    std::istringstream input_unused;
+    std::ostringstream output;
+    const int exit_code =
+        run_agent_interactive_loop(agent, input_unused, output, workspace_root);
+
+    std::cin.rdbuf(original_cin_buf);
+
+    expect_true(exit_code == 0, "Interactive runner should accept /config commands");
+
+    SettingsStore settings(workspace_root);
+    settings.load();
+    const auto dirs = settings.additional_command_dirs();
+    expect_true(dirs.size() == 1 && dirs.front() == std::filesystem::path("custom-cmds"),
+                "Config command should persist local settings");
+    expect_true(output.str().find("[\"custom-cmds\"]") != std::string::npos,
+                "Config get should print persisted setting values");
 }
 
 void expect_terminal_ui_config_defaults_to_scrollback_safe() {
@@ -2022,6 +2218,16 @@ int main() {
          expect_agent_runner_single_turn_writes_response},
         {"agent runner interactive loop handles commands",
          expect_agent_runner_interactive_loop_handles_commands},
+        {"settings store merges scopes and additional command dirs",
+         expect_settings_store_merges_scopes_and_additional_command_dirs},
+        {"permission rule engine persists and resolves scope",
+         expect_permission_rule_engine_persists_and_resolves_scope},
+        {"slash command registry loads custom commands and expands arguments",
+         expect_slash_command_registry_loads_custom_commands_and_expands_arguments},
+        {"agent runner loads workspace custom slash commands",
+         expect_agent_runner_loads_workspace_custom_slash_commands},
+        {"agent runner config command persists local settings",
+         expect_agent_runner_config_command_persists_local_settings},
         {"terminal UI config defaults to scrollback-safe",
          expect_terminal_ui_config_defaults_to_scrollback_safe},
         {"terminal UI config allows transient override",
